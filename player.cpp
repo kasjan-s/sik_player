@@ -122,6 +122,27 @@ void* udp(void* rport) {
     pthread_exit(retval);
 }
 
+int extract_meta_int(std::string header) {
+    std::string METAINTSTR = "icy-metaint:";
+    size_t metaint_pos;
+    int metadata_int = 0;
+    if ((metaint_pos = header.find(METAINTSTR)) == std::string::npos) {
+        std::cerr << "Header didn't containt metadata int" << std::endl;
+        return -1;
+    }
+
+    std::string mdistr1 = header.substr(metaint_pos + METAINTSTR.size());
+    std::string mdistr2 = mdistr1.substr(0, mdistr1.find("\r\n"));
+
+    std::istringstream ss(mdistr2);
+    if (!(ss >> metadata_int)) {
+        std::cerr << "Wrong metaint in header " << ss.str() << std::endl;
+        return -1;
+    }
+
+    return metadata_int;
+}
+
 int main(int argc, char *argv[])
 {
     int exit_code = 0;
@@ -147,14 +168,6 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    pthread_t udpThread;
-
-    if (pthread_create(&udpThread, NULL, udp, &m_port)) {
-        std::cerr << "Error creating thread" << std::endl;
-        return 1;
-    }
-
-
     // 'converting' host/port in string to struct addrinfo
     memset(&addr_hints, 0, sizeof(struct addrinfo));
     addr_hints.ai_family = AF_INET; // IPv4
@@ -163,12 +176,10 @@ int main(int argc, char *argv[])
     err = getaddrinfo(argv[1], argv[3], &addr_hints, &addr_result);
     if (err == EAI_SYSTEM) { // system error
         std::cerr << "Systerm error during getaddrinfo: %s" << gai_strerror(err) << std::endl;
-        pthread_cancel(udpThread);
         return 1;
     }
     else if (err != 0) { // other error (host not found, etc.)
         std::cerr << "Error during getaddrinfo: %s" << gai_strerror(err) << std::endl;
-        pthread_cancel(udpThread);
         return 1;
     }
 
@@ -176,14 +187,12 @@ int main(int argc, char *argv[])
     sock = socket(addr_result->ai_family, addr_result->ai_socktype, addr_result->ai_protocol);
     if (sock < 0) {
         std::cerr << "Error during socket call" << std::endl;
-        pthread_cancel(udpThread);
         return 1;
     }
 
     // connect socket to the server
     if (connect(sock, addr_result->ai_addr, addr_result->ai_addrlen) < 0) {
         std::cerr << "Error during connect" << std::endl;
-        pthread_cancel(udpThread);
         return 1;
     }
 
@@ -192,7 +201,6 @@ int main(int argc, char *argv[])
     std::string mdstr = argv[6];
     if (mdstr != "yes" && mdstr != "no") {
         std::cout << "Invalid option for metadata. Write 'yes' or 'no'." << std::endl;
-        pthread_cancel(udpThread);
         return 1;
     }
     bool md = mdstr == "yes";
@@ -202,9 +210,17 @@ int main(int argc, char *argv[])
     len = request.size();
     if (write(sock, request.c_str(), len) != len) {
         std::cerr << "Error sending GET request" << std::endl;
-        pthread_cancel(udpThread);
         return 1;
     }
+
+
+    pthread_t udpThread;
+
+    if (pthread_create(&udpThread, NULL, udp, &m_port)) {
+        std::cerr << "Error creating thread" << std::endl;
+        return 1;
+    }
+
 
     std::string header;
     std::string partial_data;
@@ -226,6 +242,7 @@ int main(int argc, char *argv[])
         if (pos != std::string::npos) {
             header += partial.substr(0, pos + 4);
             partial_data = partial.substr(pos+4);
+            break;
         } else {
             header += partial;
         }
@@ -236,6 +253,33 @@ int main(int argc, char *argv[])
         pthread_cancel(udpThread);
         return 1;
     }
+
+    std::cerr << "Header loaded" << std::endl;
+    std::cerr << header << std::endl;
+
+    int metadata_int = -1;
+    if (md) {
+        metadata_int = extract_meta_int(header);
+
+        if (metadata_int < 0) {
+            pthread_cancel(udpThread);
+            return 1;
+        }
+    }
+
+    std::cerr << metadata_int << std::endl;
+
+    size_t bytes_read = 0;
+    // std::string titlebeg = "StreamTitle='";
+    // std::string titleend = "';StreamUrl";
+    // size_t pos = header.find(titlebeg"StreamTitle='") + titlebeg.size();
+    // std::string strTitle = header.substr(pos,
+    //                                      header.find(titleend) - pos);
+    // std::istringstream ss(argv[5]);
+    // if (!(ss >> m_port)) {
+    //     std::cerr << "Invalid port number " << argv[5] << std::endl;
+    //     return 1;
+    // }
 
     for (;;) {
         if (quit)
@@ -249,7 +293,14 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-        std::cout.write(buffer, rcv_len);
+        bytes_read += rcv_len;
+
+        if (bytes_read <= metadata_int) {
+            std::cout.write(buffer, rcv_len);
+        } else {
+            
+        }
+
     }
 
     std::cout.flush();
