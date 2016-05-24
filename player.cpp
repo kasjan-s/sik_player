@@ -143,6 +143,13 @@ int extract_meta_int(std::string header) {
     return metadata_int;
 }
 
+void parseMetadata(std::string metadata) {
+    if (metadata.size()) {
+        std::cerr << "Metadata size " << metadata.size() << std::endl;
+        std::cerr << metadata << std::endl;
+    }
+}
+
 int main(int argc, char *argv[])
 {
     int exit_code = 0;
@@ -281,10 +288,14 @@ int main(int argc, char *argv[])
     //     return 1;
     // }
 
+    bool receiving_meta = false;
+    std::string metadata;
+
     for (;;) {
         if (quit)
             break;
 
+        // Read from sock
         memset(buffer, 0, sizeof(buffer));
         rcv_len = read(sock, buffer, sizeof(buffer) - 1);
         if (rcv_len < 0) {
@@ -296,9 +307,47 @@ int main(int argc, char *argv[])
         bytes_read += rcv_len;
 
         if (bytes_read <= metadata_int) {
+            // Didn't reach metadata part yet
             std::cout.write(buffer, rcv_len);
         } else {
-            
+            // Write the rest of the audio
+            size_t data_len = rcv_len - (bytes_read - metadata_int);
+            std::cout.write(buffer, data_len);
+
+            // Read metadata lenght byte
+            size_t md_len = bytes_read - metadata_int - 1;
+            int metadata_length = static_cast<int>(buffer[data_len]) * 16;
+            // std::cerr << "Read metadata lenght byte: " << metadata_length << std::endl;
+
+            std::string metadata(buffer + data_len +1, md_len);
+
+            // Receive and parse metadata
+            while (metadata.size() < metadata_length) {
+                if (quit)
+                    break;
+
+                memset(buffer, 0, sizeof(buffer));
+                rcv_len = read(sock, buffer, sizeof(buffer) - 1);
+                if (rcv_len < 0) {
+                    std::cerr << "Error receiving from server" << std::endl;
+                    pthread_cancel(udpThread);
+                    return 1;
+                }
+
+                metadata.append(buffer, rcv_len);
+            }
+
+            if (quit)
+                break;
+
+            // Write the extra data
+            std::string audio = metadata.substr(metadata_length);
+            std::cout.write(audio.c_str(), audio.size());
+            bytes_read = audio.size();
+
+            // Parse metadataa
+            metadata = metadata.substr(0, metadata_length);
+            parseMetadata(metadata);
         }
 
     }
