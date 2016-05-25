@@ -143,11 +143,27 @@ int extract_meta_int(std::string header) {
     return metadata_int;
 }
 
-void parseMetadata(std::string metadata) {
+int parseMetadata(std::string metadata) {
     if (metadata.size()) {
         std::cerr << "Metadata size " << metadata.size() << std::endl;
         std::cerr << metadata << std::endl;
+
+        std::string titlebeg = "StreamTitle='";
+        std::string titleend = "';";
+        size_t beg = metadata.find(titlebeg);
+        size_t end = metadata.find(titleend);
+
+        if (beg == std::string::npos || end == std::string::npos) 
+            return -1;
+
+
+        size_t pos = beg + titlebeg.size();
+        std::string strTitle = metadata.substr(pos, end- pos);
+
+        streamTitle = strTitle;
     }
+
+    return 0;
 }
 
 int main(int argc, char *argv[])
@@ -277,16 +293,6 @@ int main(int argc, char *argv[])
     std::cerr << metadata_int << std::endl;
 
     size_t bytes_read = 0;
-    // std::string titlebeg = "StreamTitle='";
-    // std::string titleend = "';StreamUrl";
-    // size_t pos = header.find(titlebeg"StreamTitle='") + titlebeg.size();
-    // std::string strTitle = header.substr(pos,
-    //                                      header.find(titleend) - pos);
-    // std::istringstream ss(argv[5]);
-    // if (!(ss >> m_port)) {
-    //     std::cerr << "Invalid port number " << argv[5] << std::endl;
-    //     return 1;
-    // }
 
     bool receiving_meta = false;
     std::string metadata;
@@ -347,7 +353,11 @@ int main(int argc, char *argv[])
 
             // Parse metadataa
             metadata = metadata.substr(0, metadata_length);
-            parseMetadata(metadata);
+            if (parseMetadata(metadata) < 0) {
+                std::cerr << "Metadata doesn't contain StreamTitle" << std::endl;
+                pthread_cancel(udpThread);
+                return 1;
+            }
         }
 
     }
