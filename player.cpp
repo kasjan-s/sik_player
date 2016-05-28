@@ -9,6 +9,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <regex>
 
 #define BUFFER_SIZE 2000
 #define UDP_BUFFER_SIZE 10
@@ -33,7 +34,7 @@ void displayHelp() {
     std::cout << "\tmd       - require metadata" << std::endl;
 }
 
-std::string getPath(std::string path, bool md) {
+std::string get_request(std::string path, bool md) {
     std::ostringstream oss;
     oss << "GET " << path << " HTTP/1.0 \r\n";
     oss << "User-Agent: MPlayer 2.0-728-g2c378c7-4build1\r\n";
@@ -42,14 +43,6 @@ std::string getPath(std::string path, bool md) {
     oss << "\r\n";
 
     return oss.str();
-}
-
-void Dump( const void * mem, unsigned int n ) {
-    const char * p = reinterpret_cast< const char *>( mem );
-    for ( unsigned int i = 0; i < n; i++ ) {
-        std::cout <<  p[i];
-    }
-    std::cout << std::endl;
 }
 
 void* udp(void* rport) {
@@ -168,7 +161,6 @@ int parseMetadata(std::string metadata) {
 
 int main(int argc, char *argv[])
 {
-    int exit_code = 0;
     if (argc != 7) {
         // ./player host path r-port file m-port md
         displayHelp();
@@ -179,7 +171,7 @@ int main(int argc, char *argv[])
     struct addrinfo addr_hints;
     struct addrinfo *addr_result;
 
-    int i, err;
+    int  err;
     char buffer[BUFFER_SIZE];
     ssize_t len, rcv_len;
 
@@ -221,6 +213,17 @@ int main(int argc, char *argv[])
 
     freeaddrinfo(addr_result);
 
+    // set socket timeout
+    struct timeval timeout;
+    timeout.tv_sec = 5;
+    timeout.tv_usec = 0;
+
+    if (setsockopt (sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
+        std::cerr << "Setsockopt failed" << std::endl;
+        return 1;
+    }
+
+    // check metadata option
     std::string mdstr = argv[6];
     if (mdstr != "yes" && mdstr != "no") {
         std::cout << "Invalid option for metadata. Write 'yes' or 'no'." << std::endl;
@@ -228,7 +231,8 @@ int main(int argc, char *argv[])
     }
     bool md = mdstr == "yes";
 
-    std::string request = getPath(argv[2], md);
+    // send GET request
+    std::string request = get_request(argv[2], md);
 
     len = request.size();
     if (write(sock, request.c_str(), len) != len) {
@@ -236,67 +240,72 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // start UDP thread, that's listening for incomming commands
+    pthread_t udp_thread;
 
-    pthread_t udpThread;
-
-    if (pthread_create(&udpThread, NULL, udp, &m_port)) {
+    if (pthread_create(&udp_thread, NULL, udp, &m_port)) {
         std::cerr << "Error creating thread" << std::endl;
         return 1;
     }
 
-
+    // get and parse header
     std::string header;
     std::string partial_data;
-    while (header.size() <= HEADER_SIZE_LIMIT) {
-        if (quit)
+    bool header_end = false;
+    int metadata_int = -1;
+    while (!header_end) {
+        if (quit || header_end)
             break;
 
-        size_t current_size = header.size();
         memset(buffer, 0, sizeof(buffer));
         rcv_len = read(sock, buffer, sizeof(buffer) - 1);
         if (rcv_len < 0) {
             std::cerr << "Error receiving from server" << std::endl;
-            pthread_cancel(udpThread);
+            pthread_cancel(udp_thread);
             return 1;
         }
 
-        std::string partial(buffer, rcv_len);
-        size_t pos = partial.find("\r\n\r\n");
-        if (pos != std::string::npos) {
-            header += partial.substr(0, pos + 4);
-            partial_data = partial.substr(pos+4);
-            break;
-        } else {
-            header += partial;
+        header.append(buffer, rcv_len);
+
+        std::string DELIMETER = "\r\n";
+        size_t pos;
+        while ((pos = header.find(DELIMETER)) != std::string::npos) {
+            std::string header_line = header.substr(0, pos);
+            header.erase(0, pos + DELIMETER.size());
+
+            // parse header line
+            if (header_line.length() == 0) {
+                header_end = true;
+            } else if (header_line.find("icy-metaint:") != std::string::npos) {
+                if (md) {
+                    metadata_int = extract_meta_int(header_line);
+
+                    if (metadata_int < 0) {
+                        pthread_cancel(udp_thread);
+                        return 1;
+                    }
+                }
+            } else {
+                std::cerr << "Ignoring: " << header_line << std::endl;
+            }
         }
     }
 
-    if (header.size() > HEADER_SIZE_LIMIT) {
-        std::cerr << "Header exceeded the limit" << std::endl;
-        pthread_cancel(udpThread);
+
+    if (md && metadata_int < 0) {
+        std::cerr << "Header did not contain the requested metaint" << std::endl;
+        pthread_cancel(udp_thread);
         return 1;
     }
-
     std::cerr << "Header loaded" << std::endl;
-    std::cerr << header << std::endl;
-
-    int metadata_int = -1;
-    if (md) {
-        metadata_int = extract_meta_int(header);
-
-        if (metadata_int < 0) {
-            pthread_cancel(udpThread);
-            return 1;
-        }
-    }
-
     std::cerr << metadata_int << std::endl;
 
-    size_t bytes_read = 0;
+    // leftover data that might have been received with header frames
+    size_t bytes_read = header.size();
+    if (play)
+        std::cout.write(header.c_str(), header.size());
 
-    bool receiving_meta = false;
     std::string metadata;
-
     for (;;) {
         if (quit)
             break;
@@ -306,29 +315,30 @@ int main(int argc, char *argv[])
         rcv_len = read(sock, buffer, sizeof(buffer) - 1);
         if (rcv_len < 0) {
             std::cerr << "Error receiving from server" << std::endl;
-            pthread_cancel(udpThread);
+            pthread_cancel(udp_thread);
             return 1;
         }
 
         bytes_read += rcv_len;
 
-        if (bytes_read <= metadata_int) {
+        if (bytes_read <= (size_t) metadata_int) {
             // Didn't reach metadata part yet
-            std::cout.write(buffer, rcv_len);
+            if (play)
+                std::cout.write(buffer, rcv_len);
         } else {
             // Write the rest of the audio
             size_t data_len = rcv_len - (bytes_read - metadata_int);
-            std::cout.write(buffer, data_len);
+            if (play)
+                std::cout.write(buffer, data_len);
 
             // Read metadata lenght byte
             size_t md_len = bytes_read - metadata_int - 1;
             int metadata_length = static_cast<int>(buffer[data_len]) * 16;
-            // std::cerr << "Read metadata lenght byte: " << metadata_length << std::endl;
 
             std::string metadata(buffer + data_len +1, md_len);
 
             // Receive and parse metadata
-            while (metadata.size() < metadata_length) {
+            while (metadata.size() < (size_t) metadata_length) {
                 if (quit)
                     break;
 
@@ -336,7 +346,7 @@ int main(int argc, char *argv[])
                 rcv_len = read(sock, buffer, sizeof(buffer) - 1);
                 if (rcv_len < 0) {
                     std::cerr << "Error receiving from server" << std::endl;
-                    pthread_cancel(udpThread);
+                    pthread_cancel(udp_thread);
                     return 1;
                 }
 
@@ -348,14 +358,15 @@ int main(int argc, char *argv[])
 
             // Write the extra data
             std::string audio = metadata.substr(metadata_length);
-            std::cout.write(audio.c_str(), audio.size());
+            if (play)
+                std::cout.write(audio.c_str(), audio.size());
             bytes_read = audio.size();
 
             // Parse metadataa
             metadata = metadata.substr(0, metadata_length);
             if (parseMetadata(metadata) < 0) {
                 std::cerr << "Metadata doesn't contain StreamTitle" << std::endl;
-                pthread_cancel(udpThread);
+                pthread_cancel(udp_thread);
                 return 1;
             }
         }
@@ -366,12 +377,12 @@ int main(int argc, char *argv[])
     (void) close(sock); // socket would be closed anyway when the program ends
 
     void *status;
-    if (pthread_join(udpThread, &status)) {
+    if (pthread_join(udp_thread, &status)) {
         std::cerr << "Error joining threads" << std::endl;
         return 1;
     }
 
-    exit_code = *((int*)status);
+    int exit_code = *((int*)status);
     delete (int*)status;
     return exit_code;
 

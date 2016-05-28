@@ -1,12 +1,11 @@
 TARGET: player
 
-CC	= g++
-CFLAGS	= -Wall -O2 -std=c++11
-LFLAGS	= -Wall -pthread
+CXX		:= g++
+CXXFLAGS	:= -Wall -O2 -pthread -std=c++11
 
 
 player: player.o
-	$(CC) $(LFLAGS) $^ -o $@
+	$(CXX) $(CXXFLAGS) $^ -o $@
 
 .PHONY: clean TARGET
 clean:
