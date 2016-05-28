@@ -1,6 +1,7 @@
 #include <iostream>
 #include <pthread.h>
 #include <string>
+#include <fstream>
 #include <sstream>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -8,8 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-
-#include <regex>
+#include <fcntl.h>
 
 #define BUFFER_SIZE 2000
 #define UDP_BUFFER_SIZE 10
@@ -20,8 +20,10 @@ const std::string PAUSE_COMMAND = "PAUSE";
 const std::string TITLE_COMMAND = "TITLE";
 const std::string QUIT_COMMAND = "QUIT";
 
-bool play = true;
-std::string streamTitle = "TestTitle";
+
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+bool paused = false;
+std::string stream_title = "";
 bool quit = false;
 
 void displayHelp() {
@@ -45,6 +47,14 @@ std::string get_request(std::string path, bool md) {
     return oss.str();
 }
 
+bool is_true_protected(bool &val) {
+    bool ret;
+    pthread_mutex_lock(&mutex);
+    ret = val;
+    pthread_mutex_unlock(&mutex);
+    return ret;
+}
+
 void* udp(void* rport) {
     int* retval = new int;
     *retval = 0;
@@ -54,7 +64,11 @@ void* udp(void* rport) {
     char udpBuffer[UDP_BUFFER_SIZE];
     if (sock < 0) {
         std::cerr << "Couldn't open UDP socket on port " << port << std::endl;
-        return 0;
+        pthread_mutex_lock(&mutex);
+        quit = true;
+        pthread_mutex_unlock(&mutex);
+        *retval = 1;
+        pthread_exit(retval);
     }
 
     struct sockaddr_in server_address;
@@ -66,13 +80,16 @@ void* udp(void* rport) {
     if (bind(sock, (struct sockaddr *) &server_address,
              (socklen_t) sizeof(server_address)) < 0) {
         std::cerr << "Couldn't bind the UDP socket" << std::endl;
+        pthread_mutex_lock(&mutex);
+        quit = true;
+        pthread_mutex_unlock(&mutex);
         *retval = 1;
         pthread_exit(retval);
     }
 
     int snda_len = (socklen_t) sizeof(client_address);
     for (;;) {
-        if (quit)
+        if (is_true_protected(quit))
             break;
 
         int len, flags, sflags;
@@ -84,6 +101,9 @@ void* udp(void* rport) {
                            (struct sockaddr *) &client_address, &rcva_len);
             if (len < 0) {
                 std::cerr << "Error receiving datagram" << std::endl;
+                pthread_mutex_lock(&mutex);
+                quit = true;
+                pthread_mutex_unlock(&mutex);
                 *retval = 1;
                 pthread_exit(retval);
             }
@@ -91,21 +111,32 @@ void* udp(void* rport) {
             std::string command(udpBuffer, len);
 
             if (command == PAUSE_COMMAND) {
-                play = false;
+                pthread_mutex_lock(&mutex);
+                paused = true;
+                pthread_mutex_unlock(&mutex);
             } else if (command == PLAY_COMMAND) {
-                play = true;
+                pthread_mutex_lock(&mutex);
+                paused = false;
+                pthread_mutex_unlock(&mutex);
             } else if (command == TITLE_COMMAND) {
                 sflags = 0;
-                std::string title = streamTitle;
-                snd_len = sendto(sock, streamTitle.c_str(), (size_t) title.size(),
+                pthread_mutex_lock(&mutex);
+                std::string title = stream_title;
+                pthread_mutex_unlock(&mutex);
+                snd_len = sendto(sock, title.c_str(), (size_t) title.size(),
                                  sflags, (struct sockaddr *) &client_address, snda_len);
                 if (snd_len < 0) {
+                    pthread_mutex_lock(&mutex);
+                    quit = true;
+                    pthread_mutex_unlock(&mutex);
                     std::cerr << "Error sending datagram" << std::endl;
                     *retval = 1;
                     pthread_exit(retval);
                 }
             } else if (command == QUIT_COMMAND) {
+                pthread_mutex_lock(&mutex);
                 quit = true;
+                pthread_mutex_unlock(&mutex);
                 pthread_exit(retval);
             } else {
                 std::cerr << "Ignoring invalid command: " << command << std::endl;
@@ -115,16 +146,16 @@ void* udp(void* rport) {
     pthread_exit(retval);
 }
 
-int extract_meta_int(std::string header) {
+int extract_meta_int(std::string header_line) {
     std::string METAINTSTR = "icy-metaint:";
     size_t metaint_pos;
     int metadata_int = 0;
-    if ((metaint_pos = header.find(METAINTSTR)) == std::string::npos) {
+    if ((metaint_pos = header_line.find(METAINTSTR)) == std::string::npos) {
         std::cerr << "Header didn't containt metadata int" << std::endl;
         return -1;
     }
 
-    std::string mdistr1 = header.substr(metaint_pos + METAINTSTR.size());
+    std::string mdistr1 = header_line.substr(metaint_pos + METAINTSTR.size());
     std::string mdistr2 = mdistr1.substr(0, mdistr1.find("\r\n"));
 
     std::istringstream ss(mdistr2);
@@ -136,24 +167,22 @@ int extract_meta_int(std::string header) {
     return metadata_int;
 }
 
-int parseMetadata(std::string metadata) {
+int parse_metadata(std::string metadata) {
     if (metadata.size()) {
-        std::cerr << "Metadata size " << metadata.size() << std::endl;
-        std::cerr << metadata << std::endl;
-
         std::string titlebeg = "StreamTitle='";
         std::string titleend = "';";
         size_t beg = metadata.find(titlebeg);
         size_t end = metadata.find(titleend);
 
-        if (beg == std::string::npos || end == std::string::npos) 
+        if (beg == std::string::npos || end == std::string::npos)
             return -1;
 
-
         size_t pos = beg + titlebeg.size();
-        std::string strTitle = metadata.substr(pos, end- pos);
+        std::string strTitle = metadata.substr(pos, end - pos);
 
-        streamTitle = strTitle;
+        pthread_mutex_lock(&mutex);
+        stream_title = strTitle;
+        pthread_mutex_unlock(&mutex);
     }
 
     return 0;
@@ -182,6 +211,18 @@ int main(int argc, char *argv[])
         std::cerr << "Invalid port number " << argv[5] << std::endl;
         return 1;
     }
+
+    std::streambuf *buf;
+    std::ofstream outfile;
+
+    if (std::string(argv[4]) != "-") {
+        outfile.open(std::string(argv[4]));
+        buf = outfile.rdbuf();
+    } else {
+        buf = std::cout.rdbuf();
+    }
+
+    std::ostream output(buf);
 
     // 'converting' host/port in string to struct addrinfo
     memset(&addr_hints, 0, sizeof(struct addrinfo));
@@ -226,7 +267,7 @@ int main(int argc, char *argv[])
     // check metadata option
     std::string mdstr = argv[6];
     if (mdstr != "yes" && mdstr != "no") {
-        std::cout << "Invalid option for metadata. Write 'yes' or 'no'." << std::endl;
+        std::cerr << "Invalid option for metadata. Write 'yes' or 'no'." << std::endl;
         return 1;
     }
     bool md = mdstr == "yes";
@@ -253,8 +294,8 @@ int main(int argc, char *argv[])
     std::string partial_data;
     bool header_end = false;
     int metadata_int = -1;
-    while (!header_end) {
-        if (quit || header_end)
+    for (;;) {
+        if (header_end || is_true_protected(quit))
             break;
 
         memset(buffer, 0, sizeof(buffer));
@@ -297,17 +338,15 @@ int main(int argc, char *argv[])
         pthread_cancel(udp_thread);
         return 1;
     }
-    std::cerr << "Header loaded" << std::endl;
-    std::cerr << metadata_int << std::endl;
 
     // leftover data that might have been received with header frames
     size_t bytes_read = header.size();
-    if (play)
-        std::cout.write(header.c_str(), header.size());
+    if (!is_true_protected(paused))
+        output.write(header.c_str(), header.size());
 
     std::string metadata;
     for (;;) {
-        if (quit)
+        if (is_true_protected(quit))
             break;
 
         // Read from sock
@@ -323,13 +362,13 @@ int main(int argc, char *argv[])
 
         if (bytes_read <= (size_t) metadata_int) {
             // Didn't reach metadata part yet
-            if (play)
-                std::cout.write(buffer, rcv_len);
+            if (!is_true_protected(paused))
+                output.write(buffer, rcv_len);
         } else {
             // Write the rest of the audio
             size_t data_len = rcv_len - (bytes_read - metadata_int);
-            if (play)
-                std::cout.write(buffer, data_len);
+            if (!is_true_protected(paused))
+                output.write(buffer, data_len);
 
             // Read metadata lenght byte
             size_t md_len = bytes_read - metadata_int - 1;
@@ -339,7 +378,7 @@ int main(int argc, char *argv[])
 
             // Receive and parse metadata
             while (metadata.size() < (size_t) metadata_length) {
-                if (quit)
+                if (is_true_protected(quit))
                     break;
 
                 memset(buffer, 0, sizeof(buffer));
@@ -353,18 +392,18 @@ int main(int argc, char *argv[])
                 metadata.append(buffer, rcv_len);
             }
 
-            if (quit)
+            if (is_true_protected(quit))
                 break;
 
             // Write the extra data
             std::string audio = metadata.substr(metadata_length);
-            if (play)
-                std::cout.write(audio.c_str(), audio.size());
+            if (!is_true_protected(paused))
+                output.write(audio.c_str(), audio.size());
             bytes_read = audio.size();
 
             // Parse metadataa
             metadata = metadata.substr(0, metadata_length);
-            if (parseMetadata(metadata) < 0) {
+            if (parse_metadata(metadata) < 0) {
                 std::cerr << "Metadata doesn't contain StreamTitle" << std::endl;
                 pthread_cancel(udp_thread);
                 return 1;
@@ -373,8 +412,13 @@ int main(int argc, char *argv[])
 
     }
 
-    std::cout.flush();
+    if (!is_true_protected(paused))
+        output.flush();
+
     (void) close(sock); // socket would be closed anyway when the program ends
+
+    if (outfile.is_open())
+        outfile.close();
 
     void *status;
     if (pthread_join(udp_thread, &status)) {
@@ -385,5 +429,4 @@ int main(int argc, char *argv[])
     int exit_code = *((int*)status);
     delete (int*)status;
     return exit_code;
-
 }
