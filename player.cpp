@@ -14,7 +14,6 @@
 
 #define BUFFER_SIZE 2000
 #define UDP_BUFFER_SIZE 10
-#define HEADER_SIZE_LIMIT 1000000
 
 const std::string PLAY_COMMAND = "PLAY";
 const std::string PAUSE_COMMAND = "PAUSE";
@@ -243,6 +242,12 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // connect socket to the server
+    if (connect(sock, addr_result->ai_addr, addr_result->ai_addrlen) < 0) {
+        std::cerr << "Error during connect" << std::endl;
+        return 1;
+    }
+
     // set socket timeout
     struct timeval timeout;
     timeout.tv_sec = 5;
@@ -250,12 +255,6 @@ int main(int argc, char *argv[])
 
     if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
         std::cerr << "Setsockopt failed" << std::endl;
-        return 1;
-    }
-
-    // connect socket to the server
-    if (connect(sock, addr_result->ai_addr, addr_result->ai_addrlen) < 0) {
-        std::cerr << "Error during connect" << std::endl;
         return 1;
     }
 
@@ -344,7 +343,6 @@ int main(int argc, char *argv[])
             }
         }
     }
-
 
     if (md && metadata_int < 0) {
         std::cerr << "Header did not contain the requested metaint" << std::endl;
