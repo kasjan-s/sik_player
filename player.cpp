@@ -1,8 +1,9 @@
-#include <iostream>
+#include <boost/regex.hpp>
 #include <pthread.h>
-#include <string>
+#include <iostream>
 #include <fstream>
 #include <sstream>
+#include <string>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -88,61 +89,59 @@ void* udp(void* rport) {
     }
 
     int snda_len = (socklen_t) sizeof(client_address);
-    for (;;) {
+    int len, flags, sflags;
+    socklen_t rcva_len, snd_len;
+    do {
         if (is_true_protected(quit))
             break;
 
-        int len, flags, sflags;
-        socklen_t rcva_len, snd_len;
-        do {
-            rcva_len = (socklen_t) sizeof(client_address);
-            flags = 0;
-            len = recvfrom(sock, udpBuffer, sizeof(udpBuffer), flags,
-                           (struct sockaddr *) &client_address, &rcva_len);
-            if (len < 0) {
-                std::cerr << "Error receiving datagram" << std::endl;
+        rcva_len = (socklen_t) sizeof(client_address);
+        flags = 0;
+        len = recvfrom(sock, udpBuffer, sizeof(udpBuffer), flags,
+                       (struct sockaddr *) &client_address, &rcva_len);
+        if (len < 0) {
+            std::cerr << "Error receiving datagram" << std::endl;
+            pthread_mutex_lock(&mutex);
+            quit = true;
+            pthread_mutex_unlock(&mutex);
+            *retval = 1;
+            pthread_exit(retval);
+        }
+
+        std::string command(udpBuffer, len);
+
+        if (command == PAUSE_COMMAND) {
+            pthread_mutex_lock(&mutex);
+            paused = true;
+            pthread_mutex_unlock(&mutex);
+        } else if (command == PLAY_COMMAND) {
+            pthread_mutex_lock(&mutex);
+            paused = false;
+            pthread_mutex_unlock(&mutex);
+        } else if (command == TITLE_COMMAND) {
+            sflags = 0;
+            pthread_mutex_lock(&mutex);
+            std::string title = stream_title;
+            pthread_mutex_unlock(&mutex);
+            snd_len = sendto(sock, title.c_str(), (size_t) title.size(),
+                             sflags, (struct sockaddr *) &client_address, snda_len);
+            if (snd_len < 0) {
                 pthread_mutex_lock(&mutex);
                 quit = true;
                 pthread_mutex_unlock(&mutex);
+                std::cerr << "Error sending datagram" << std::endl;
                 *retval = 1;
                 pthread_exit(retval);
             }
-
-            std::string command(udpBuffer, len);
-
-            if (command == PAUSE_COMMAND) {
-                pthread_mutex_lock(&mutex);
-                paused = true;
-                pthread_mutex_unlock(&mutex);
-            } else if (command == PLAY_COMMAND) {
-                pthread_mutex_lock(&mutex);
-                paused = false;
-                pthread_mutex_unlock(&mutex);
-            } else if (command == TITLE_COMMAND) {
-                sflags = 0;
-                pthread_mutex_lock(&mutex);
-                std::string title = stream_title;
-                pthread_mutex_unlock(&mutex);
-                snd_len = sendto(sock, title.c_str(), (size_t) title.size(),
-                                 sflags, (struct sockaddr *) &client_address, snda_len);
-                if (snd_len < 0) {
-                    pthread_mutex_lock(&mutex);
-                    quit = true;
-                    pthread_mutex_unlock(&mutex);
-                    std::cerr << "Error sending datagram" << std::endl;
-                    *retval = 1;
-                    pthread_exit(retval);
-                }
-            } else if (command == QUIT_COMMAND) {
-                pthread_mutex_lock(&mutex);
-                quit = true;
-                pthread_mutex_unlock(&mutex);
-                pthread_exit(retval);
-            } else {
-                std::cerr << "Ignoring invalid command: " << command << std::endl;
-            }
-        } while (len >  0);
-    }
+        } else if (command == QUIT_COMMAND) {
+            pthread_mutex_lock(&mutex);
+            quit = true;
+            pthread_mutex_unlock(&mutex);
+            pthread_exit(retval);
+        } else {
+            std::cerr << "Ignoring invalid command: " << command << std::endl;
+        }
+    } while (len >  0);
     pthread_exit(retval);
 }
 
@@ -168,21 +167,19 @@ int extract_meta_int(std::string header_line) {
 }
 
 int parse_metadata(std::string metadata) {
+    static std::string TITLE_REGEX = "^.*StreamTitle='(.*?)';.*$";
+
     if (metadata.size()) {
-        std::string titlebeg = "StreamTitle='";
-        std::string titleend = "';";
-        size_t beg = metadata.find(titlebeg);
-        size_t end = metadata.find(titleend);
-
-        if (beg == std::string::npos || end == std::string::npos)
+        boost::regex re;
+        boost::cmatch matches;
+        re.assign(TITLE_REGEX);
+        if (boost::regex_match(metadata.c_str(), matches, re)) {
+            pthread_mutex_lock(&mutex);
+            stream_title = matches[1];
+            pthread_mutex_unlock(&mutex);
+        } else {
             return -1;
-
-        size_t pos = beg + titlebeg.size();
-        std::string strTitle = metadata.substr(pos, end - pos);
-
-        pthread_mutex_lock(&mutex);
-        stream_title = strTitle;
-        pthread_mutex_unlock(&mutex);
+        }
     }
 
     return 0;
@@ -191,7 +188,7 @@ int parse_metadata(std::string metadata) {
 int main(int argc, char *argv[])
 {
     if (argc != 7) {
-        // ./player host path r-port file m-port md
+        std::cerr << "Wrong number of arguments" << std::endl;
         displayHelp();
         return  1;
     }
@@ -216,7 +213,7 @@ int main(int argc, char *argv[])
     std::ofstream outfile;
 
     if (std::string(argv[4]) != "-") {
-        outfile.open(std::string(argv[4]));
+        outfile.open(std::string(argv[4], std::ofstream::trunc | std::ofstream::out));
         buf = outfile.rdbuf();
     } else {
         buf = std::cout.rdbuf();
@@ -246,6 +243,16 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // set socket timeout
+    struct timeval timeout;
+    timeout.tv_sec = 5;
+    timeout.tv_usec = 0;
+
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
+        std::cerr << "Setsockopt failed" << std::endl;
+        return 1;
+    }
+
     // connect socket to the server
     if (connect(sock, addr_result->ai_addr, addr_result->ai_addrlen) < 0) {
         std::cerr << "Error during connect" << std::endl;
@@ -253,17 +260,6 @@ int main(int argc, char *argv[])
     }
 
     freeaddrinfo(addr_result);
-
-    // set socket timeout
-    struct timeval timeout;
-    timeout.tv_sec = 5;
-    timeout.tv_usec = 0;
-
-    if (setsockopt (sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
-        std::cerr << "Setsockopt failed" << std::endl;
-        return 1;
-    }
-
     // check metadata option
     std::string mdstr = argv[6];
     if (mdstr != "yes" && mdstr != "no") {
@@ -293,6 +289,7 @@ int main(int argc, char *argv[])
     std::string header;
     std::string partial_data;
     bool header_end = false;
+    bool first_line = true;
     int metadata_int = -1;
     for (;;) {
         if (header_end || is_true_protected(quit))
@@ -301,8 +298,8 @@ int main(int argc, char *argv[])
         memset(buffer, 0, sizeof(buffer));
         rcv_len = read(sock, buffer, sizeof(buffer) - 1);
         if (rcv_len < 0) {
-            std::cerr << "Error receiving from server" << std::endl;
             pthread_cancel(udp_thread);
+            std::cerr << "Error while receiving header from server" << std::endl;
             return 1;
         }
 
@@ -315,7 +312,25 @@ int main(int argc, char *argv[])
             header.erase(0, pos + DELIMETER.size());
 
             // parse header line
-            if (header_line.length() == 0) {
+            if (first_line) {
+                first_line = false;
+                static std::string STATUS_REGEX = "^ICY (\\d{3}) (.*)$";
+
+                boost::regex re;
+                boost::cmatch matches;
+                re.assign(STATUS_REGEX);
+                if (boost::regex_match(header_line.c_str(), matches, re)) {
+                    if (matches[1] == "200")
+                        continue;
+                        std::cerr << "Response code " << matches[2] << ": " << matches[3] << std::endl;
+                        pthread_cancel(udp_thread);
+                        return 1;
+                } else {
+                    std::cerr << "Server did not answer with ICY response" << std::endl;
+                    pthread_cancel(udp_thread);
+                    return 1;
+                }
+            } else if (header_line.length() == 0) {
                 header_end = true;
             } else if (header_line.find("icy-metaint:") != std::string::npos) {
                 if (md) {
@@ -326,8 +341,6 @@ int main(int argc, char *argv[])
                         return 1;
                     }
                 }
-            } else {
-                std::cerr << "Ignoring: " << header_line << std::endl;
             }
         }
     }
@@ -341,8 +354,10 @@ int main(int argc, char *argv[])
 
     // leftover data that might have been received with header frames
     size_t bytes_read = header.size();
-    if (!is_true_protected(paused))
+    if (!is_true_protected(paused)) {
         output.write(header.c_str(), header.size());
+        output.flush();
+    }
 
     std::string metadata;
     for (;;) {
@@ -353,22 +368,30 @@ int main(int argc, char *argv[])
         memset(buffer, 0, sizeof(buffer));
         rcv_len = read(sock, buffer, sizeof(buffer) - 1);
         if (rcv_len < 0) {
-            std::cerr << "Error receiving from server" << std::endl;
+            std::cerr << "Error receiving data from server " << errno <<  std::endl;
             pthread_cancel(udp_thread);
+
             return 1;
+        } else if (rcv_len == 0) {
+            pthread_cancel(udp_thread);
+            return 0;
         }
 
         bytes_read += rcv_len;
 
         if (bytes_read <= (size_t) metadata_int) {
             // Didn't reach metadata part yet
-            if (!is_true_protected(paused))
+            if (!is_true_protected(paused)) {
                 output.write(buffer, rcv_len);
+                output.flush();
+            }
         } else {
             // Write the rest of the audio
             size_t data_len = rcv_len - (bytes_read - metadata_int);
-            if (!is_true_protected(paused))
+            if (!is_true_protected(paused)) {
                 output.write(buffer, data_len);
+                output.flush();
+            }
 
             // Read metadata lenght byte
             size_t md_len = bytes_read - metadata_int - 1;
@@ -384,7 +407,8 @@ int main(int argc, char *argv[])
                 memset(buffer, 0, sizeof(buffer));
                 rcv_len = read(sock, buffer, sizeof(buffer) - 1);
                 if (rcv_len < 0) {
-                    std::cerr << "Error receiving from server" << std::endl;
+                    // Timeouts aren't allowed while receiving metadata
+                    std::cerr << "Error while receiving metadata" << std::endl;
                     pthread_cancel(udp_thread);
                     return 1;
                 }
@@ -397,8 +421,10 @@ int main(int argc, char *argv[])
 
             // Write the extra data
             std::string audio = metadata.substr(metadata_length);
-            if (!is_true_protected(paused))
+            if (!is_true_protected(paused)) {
                 output.write(audio.c_str(), audio.size());
+                output.flush();
+            }
             bytes_read = audio.size();
 
             // Parse metadataa
@@ -409,11 +435,7 @@ int main(int argc, char *argv[])
                 return 1;
             }
         }
-
     }
-
-    if (!is_true_protected(paused))
-        output.flush();
 
     (void) close(sock); // socket would be closed anyway when the program ends
 

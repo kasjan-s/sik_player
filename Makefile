@@ -1,11 +1,11 @@
 TARGET: player
 
 CXX		:= g++
-CXXFLAGS	:= -Wall -O2 -pthread -std=c++11
+CXXFLAGS	:= -Wall -O2 -pthread -lboost_regex -std=c++11
 
 
 player: player.o
-	$(CXX) $(CXXFLAGS) $^ -o $@
+	$(CXX) $^ -o $@ $(CXXFLAGS) 
 
 .PHONY: clean TARGET
 clean:
