@@ -12,7 +12,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-#define BUFFER_SIZE 2000
+#define BUFFER_SIZE 10000
 #define UDP_BUFFER_SIZE 10
 
 const std::string PLAY_COMMAND = "PLAY";
@@ -47,7 +47,7 @@ std::string get_request(std::string path, bool md) {
     return oss.str();
 }
 
-bool is_true_protected(bool &val) {
+bool is_true_safe(bool &val) {
     bool ret;
     pthread_mutex_lock(&mutex);
     ret = val;
@@ -91,7 +91,7 @@ void* udp(void* rport) {
     int len, flags, sflags;
     socklen_t rcva_len, snd_len;
     do {
-        if (is_true_protected(quit))
+        if (is_true_safe(quit))
             break;
 
         rcva_len = (socklen_t) sizeof(client_address);
@@ -140,12 +140,12 @@ void* udp(void* rport) {
         } else {
             std::cerr << "Ignoring invalid command: " << command << std::endl;
         }
-    } while (len >  0);
+    } while (len >= 0);
     pthread_exit(retval);
 }
 
 int extract_meta_int(std::string header_line) {
-    std::string METAINTSTR = "icy-metaint:";
+    static const std::string METAINTSTR = "icy-metaint:";
     size_t metaint_pos;
     int metadata_int = 0;
     if ((metaint_pos = header_line.find(METAINTSTR)) == std::string::npos) {
@@ -184,7 +184,7 @@ int parse_metadata(std::string metadata) {
     return 0;
 }
 
-int get_int(const char* arg) {
+int get_int_from_argv(const char* arg) {
     std::istringstream ss(arg);
     int ret;
     if (!(ss >> ret)) {
@@ -210,15 +210,15 @@ int main(int argc, char *argv[])
     char buffer[BUFFER_SIZE];
     ssize_t len, rcv_len;
 
-    int m_port = get_int(argv[5]);
+    int m_port = get_int_from_argv(argv[5]);
     if (m_port <= 0 || m_port > 65535) {
-        std::cerr << "Invalid port number" << std::endl;
+        std::cerr << "Invalid m-port number" << std::endl;
         return 1;
     }
 
-    int r_port = get_int(argv[3]);
+    int r_port = get_int_from_argv(argv[3]);
     if (r_port <= 0 || r_port > 65535) {
-        std::cerr << "Invalid port number" << std::endl;
+        std::cerr << "Invalid r-port number" << std::endl;
         return 1;
     }
 
@@ -273,6 +273,7 @@ int main(int argc, char *argv[])
     }
 
     freeaddrinfo(addr_result);
+
     // check metadata option
     std::string mdstr = argv[6];
     if (mdstr != "yes" && mdstr != "no") {
@@ -290,7 +291,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // start UDP thread, that's listening for incomming commands
+    // start UDP thread for incomming commands
     pthread_t udp_thread;
 
     if (pthread_create(&udp_thread, NULL, udp, &m_port)) {
@@ -304,10 +305,7 @@ int main(int argc, char *argv[])
     bool header_end = false;
     bool first_line = true;
     int metadata_int = -1;
-    for (;;) {
-        if (header_end || is_true_protected(quit))
-            break;
-
+    while (!header_end && !is_true_safe(quit)) {
         memset(buffer, 0, sizeof(buffer));
         rcv_len = read(sock, buffer, sizeof(buffer) - 1);
         if (rcv_len < 0) {
@@ -318,7 +316,7 @@ int main(int argc, char *argv[])
 
         header.append(buffer, rcv_len);
 
-        std::string DELIMETER = "\r\n";
+        static const std::string DELIMETER = "\r\n";
         size_t pos;
         while ((pos = header.find(DELIMETER)) != std::string::npos) {
             std::string header_line = header.substr(0, pos);
@@ -366,16 +364,13 @@ int main(int argc, char *argv[])
 
     // leftover data that might have been received with header frames
     size_t bytes_read = header.size();
-    if (!is_true_protected(paused)) {
+    if (!is_true_safe(paused)) {
         output.write(header.c_str(), header.size());
         output.flush();
     }
 
     std::string metadata;
-    for (;;) {
-        if (is_true_protected(quit))
-            break;
-
+    while (!is_true_safe(quit)) {
         // Read from sock
         memset(buffer, 0, sizeof(buffer));
         rcv_len = read(sock, buffer, sizeof(buffer) - 1);
@@ -393,14 +388,14 @@ int main(int argc, char *argv[])
 
         if (bytes_read <= (size_t) metadata_int) {
             // Didn't reach metadata part yet
-            if (!is_true_protected(paused)) {
+            if (!is_true_safe(paused)) {
                 output.write(buffer, rcv_len);
                 output.flush();
             }
         } else {
             // Write the rest of the audio
             size_t data_len = rcv_len - (bytes_read - metadata_int);
-            if (!is_true_protected(paused)) {
+            if (!is_true_safe(paused)) {
                 output.write(buffer, data_len);
                 output.flush();
             }
@@ -413,7 +408,7 @@ int main(int argc, char *argv[])
 
             // Receive and parse metadata
             while (metadata.size() < (size_t) metadata_length) {
-                if (is_true_protected(quit))
+                if (is_true_safe(quit))
                     break;
 
                 memset(buffer, 0, sizeof(buffer));
@@ -430,12 +425,12 @@ int main(int argc, char *argv[])
                 metadata.append(buffer, rcv_len);
             }
 
-            if (is_true_protected(quit))
+            if (is_true_safe(quit))
                 break;
 
             // Write the extra data
             std::string audio = metadata.substr(metadata_length);
-            if (!is_true_protected(paused)) {
+            if (!is_true_safe(paused)) {
                 output.write(audio.c_str(), audio.size());
                 output.flush();
             }
