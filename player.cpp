@@ -184,6 +184,16 @@ int parse_metadata(std::string metadata) {
     return 0;
 }
 
+int get_int(const char* arg) {
+    std::istringstream ss(arg);
+    int ret;
+    if (!(ss >> ret)) {
+        return -1;
+    }
+
+    return ret;
+}
+
 int main(int argc, char *argv[])
 {
     if (argc != 7) {
@@ -200,11 +210,15 @@ int main(int argc, char *argv[])
     char buffer[BUFFER_SIZE];
     ssize_t len, rcv_len;
 
-    int m_port;
+    int m_port = get_int(argv[5]);
+    if (m_port <= 0 || m_port > 65535) {
+        std::cerr << "Invalid port number" << std::endl;
+        return 1;
+    }
 
-    std::istringstream ss(argv[5]);
-    if (!(ss >> m_port)) {
-        std::cerr << "Invalid port number " << argv[5] << std::endl;
+    int r_port = get_int(argv[3]);
+    if (r_port <= 0 || r_port > 65535) {
+        std::cerr << "Invalid port number" << std::endl;
         return 1;
     }
 
@@ -407,6 +421,8 @@ int main(int argc, char *argv[])
                 if (rcv_len < 0) {
                     // Timeouts aren't allowed while receiving metadata
                     std::cerr << "Error while receiving metadata" << std::endl;
+                    std::cerr << metadata << " " << metadata.size() << " " << metadata_length <<
+                        " " << errno << std::endl;
                     pthread_cancel(udp_thread);
                     return 1;
                 }
