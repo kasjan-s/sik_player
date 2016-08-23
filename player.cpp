@@ -38,10 +38,10 @@ void displayHelp() {
 
 std::string get_request(std::string path, bool md) {
     std::ostringstream oss;
-    oss << "GET " << path << " HTTP/1.0 \r\n";
+    oss << "GET " << path << " HTTP/1.0\r\n";
     oss << "User-Agent: MPlayer 2.0-728-g2c378c7-4build1\r\n";
     if (md)
-        oss << "Icy-MetaData:1 \r\n";
+        oss << "Icy-MetaData:1\r\n";
     oss << "\r\n";
 
     return oss.str();
@@ -187,7 +187,9 @@ int parse_metadata(std::string metadata) {
 int get_int_from_argv(const char* arg) {
     std::istringstream ss(arg);
     int ret;
-    if (!(ss >> ret)) {
+    
+    // Argument has to be simply an integer number - should be writable to int without any leftovers
+    if (!(ss >> ret) || !ss.eof()) {
         return -1;
     }
 
@@ -322,7 +324,9 @@ int main(int argc, char *argv[])
             std::string header_line = header.substr(0, pos);
             header.erase(0, pos + DELIMETER.size());
 
-            // parse header line
+            // Parse header line 
+	    
+	    // First line of the header - status code
             if (first_line) {
                 first_line = false;
                 static std::string STATUS_REGEX = "^ICY (\\d{3}) (.*)$";
@@ -333,16 +337,19 @@ int main(int argc, char *argv[])
                 if (boost::regex_match(header_line.c_str(), matches, re)) {
                     if (matches[1] == "200")
                         continue;
-                        std::cerr << "Response code " << matches[2] << ": " << matches[3] << std::endl;
-                        pthread_cancel(udp_thread);
-                        return 1;
+                    std::cerr << "Response code " << matches[2] << ": " << matches[3] << std::endl;
+                    pthread_cancel(udp_thread);
+                    return 1;
                 } else {
                     std::cerr << "Server did not answer with ICY response" << std::endl;
                     pthread_cancel(udp_thread);
                     return 1;
                 }
-            } else if (header_line.length() == 0) {
+            } 
+	    // Empty line - end of header
+	    else if (header_line.length() == 0) {
                 header_end = true;
+	    // Metaint line
             } else if (header_line.find("icy-metaint:") != std::string::npos) {
                 if (md) {
                     metadata_int = extract_meta_int(header_line);
@@ -351,7 +358,11 @@ int main(int argc, char *argv[])
                         pthread_cancel(udp_thread);
                         return 1;
                     }
-                }
+                } else {
+			std::cerr << "Server provided metaint, though it was not requested" << std::endl;
+			pthread_cancel(udp_thread);
+			return 1;
+		}
             }
         }
     }
