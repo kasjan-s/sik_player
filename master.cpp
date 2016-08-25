@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -10,7 +11,33 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "session.h"
+
 #define LINE_SIZE 1000
+
+const std::string START_COMMAND = "START";
+const std::string PAUSE_COMMAND = "PAUSE";
+const std::string TITLE_COMMAND = "TITLE";
+const std::string QUIT_COMMAND = "QUIT";
+const std::string AT_COMMAND = "AT";
+
+std::map<unsigned int, PlayerSession> session_ids;
+
+unsigned int get_new_id() {
+	static int id = 0;
+	return id++;
+}
+
+std::vector<std::string> split_string(const std::string &s, char delim = ' ') {
+	std::stringstream ss(s);
+	std::string item;
+	std::vector<std::string> ret;
+	while (getline(ss, item, delim)) {
+		ret.push_back(item);
+	}
+
+	return ret;
+}
 
 int get_int_from_argv(const char* arg) {
 	std::istringstream ss(arg);
@@ -101,6 +128,13 @@ void handle_connection(int conn) {
 
 			// Parse the extracted line
 			handle_telnet_iac(line);
+			std::vector<std::string> tokens = split_string(line);
+			
+			std::string command = tokens[0];
+
+			if (command == START_COMMAND) {
+
+			}
 		}
 
 	}
