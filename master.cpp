@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -22,8 +23,42 @@ int get_int_from_argv(const char* arg) {
 	return ret;
 }
 
+void handle_telnet_iac(std::string& data) {
+	static unsigned char iac_byte = 0xFF;
+	static unsigned char iac_wwdd[] = {0xFB, 0xFC, 0xFD, 0xFE};
+
+  	for (std::string::iterator it = data.begin(); it != data.end();) {
+  		if (*it != iac_byte) {
+  			++it;
+  			continue;
+  		} 
+  		// Encountered IAC byte
+  		else {
+  			it = data.erase(it);
+
+  			// 255 255 sequence
+  			if (*it == iac_byte) {
+  				++it;
+	  			continue;
+  			} 
+
+	  		// WILL / WON'T / DO / DON'T sequence
+  			else if (std::find(iac_wwdd, iac_wwdd + 4, *it) != iac_wwdd + 4) {
+	  			it = data.erase(it);
+  				it = data.erase(it);
+  				continue;
+  			}
+
+	  		// Other sequences
+  			else {
+  				it = data.erase(it);
+  			}
+		}
+  	}
+}
+
 void handle_connection(int conn) {
-	char line[LINE_SIZE + 1], peeraddr[LINE_SIZE + 1], peername[LINE_SIZE + 1];
+	char buffer[LINE_SIZE], peeraddr[LINE_SIZE + 1], peername[LINE_SIZE + 1];
 	struct sockaddr_in addr;
 	socklen_t len = sizeof(addr);
 
@@ -35,10 +70,12 @@ void handle_connection(int conn) {
 	inet_ntop(AF_INET, &addr.sin_addr, peeraddr, LINE_SIZE);
 	snprintf(peername, LINE_SIZE, "%s:%d", peeraddr, ntohs(addr.sin_port));
 
+	std::string data;
 	int rc;
+
 	while (true) {
-		memset(line, 0, sizeof(line));
-		rc = read(conn, line, sizeof(line) - 1);
+		memset(buffer, 0, sizeof(buffer));
+		rc = read(conn, buffer, sizeof(buffer));
 
 		if (rc == -1) {
 			std::cerr << "Error while read" << std::endl;
@@ -47,8 +84,25 @@ void handle_connection(int conn) {
 			break;
 		}
 
-		rc = write(conn, line, sizeof(line) - 1);
-		std::cout << line;
+		data.append(buffer, rc);
+
+		size_t pos;
+
+		// If it finds \r\n, it won't look for \n
+		while ((pos = data.find("\r\n")) != std::string::npos
+				|| (pos = data.find("\n")) != std::string::npos) {
+
+			std::string line = data.substr(0, pos);
+
+			// Either \r\n was found or \n
+			int delimeter_length = data.find("\r\n") != std::string::npos ? 2 : 1;
+
+			data.erase(0, pos + delimeter_length);
+
+			// Parse the extracted line
+			handle_telnet_iac(line);
+		}
+
 	}
 
 	std::cerr << "Closed connection with " << peername << std::endl;
