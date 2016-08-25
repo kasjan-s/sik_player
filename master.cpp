@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -22,6 +23,8 @@ const std::string QUIT_COMMAND = "QUIT";
 const std::string AT_COMMAND = "AT";
 
 std::map<unsigned int, PlayerSession> session_ids;
+std::vector<int> active_telnet_sessions;
+std::mutex mutex;
 
 unsigned int get_new_id() {
 	static int id = 0;
@@ -97,6 +100,10 @@ void handle_connection(int conn) {
 	inet_ntop(AF_INET, &addr.sin_addr, peeraddr, LINE_SIZE);
 	snprintf(peername, LINE_SIZE, "%s:%d", peeraddr, ntohs(addr.sin_port));
 
+	mutex.lock();
+	active_telnet_sessions.push_back(conn);
+	mutex.unlock();
+
 	std::string data;
 	int rc;
 
@@ -133,6 +140,26 @@ void handle_connection(int conn) {
 			std::string command = tokens[0];
 
 			if (command == START_COMMAND) {
+				unsigned int id = get_new_id();
+				session_ids.emplace(std::piecewise_construct,
+									std::forward_as_tuple(id),
+									std::forward_as_tuple(conn, id, active_telnet_sessions, tokens, mutex));
+
+				PlayerSession& session = session_ids.at(id);
+				if (!session.start()) {
+					std::string error = "ERROR popen failed";
+					rc = write(conn, error.c_str(), error.size());
+					if (rc == -1) {
+						std::cerr << "Error while write" << std::endl;
+						return;
+					}
+					continue;
+				} else {
+					std::ostringstream ss;
+					ss << "OK " << id << std::endl;
+					std::string answer = ss.str();
+					rc = write(conn, answer.c_str(), answer.size());
+				}
 
 			}
 		}
@@ -141,6 +168,11 @@ void handle_connection(int conn) {
 
 	std::cerr << "Closed connection with " << peername << std::endl;
 	close(conn);
+	mutex.lock();
+	active_telnet_sessions.erase(
+		std::remove(active_telnet_sessions.begin(), active_telnet_sessions.end(), conn),
+		active_telnet_sessions.end());
+	mutex.unlock();
 	return;
 }
 
