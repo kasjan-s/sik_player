@@ -25,6 +25,8 @@ public:
 	bool start();
 	void send_msg(int cdescriptor, std::string str);
 	void pause(int cdescriptor);
+	void play(int cdescriptor);
+	void title(int cdescriptor);
 	void quit(int cdescriptor);
 private:
 	int connection_descriptor;
@@ -52,6 +54,7 @@ private:
 	FILE* descriptor;
 
 	bool send_datagram(std::string str);
+	bool send_datagram(std::string str, std::string& response);
 	void main_thread();
 };
 

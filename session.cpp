@@ -51,7 +51,7 @@ void PlayerSession::main_thread() {
 
 		send_msg(connection_descriptor, error);
 	}
-	
+
 	pclose(descriptor);
 	return;
 }
@@ -86,13 +86,36 @@ void PlayerSession::pause(int cdescriptor) {
 	send_msg(cdescriptor, answer);
 }
 
+void PlayerSession::play(int cdescriptor) {
+	std::ostringstream ss;
+	if (send_datagram("PLAY")) {
+		ss << "OK " << id << std::endl;
+	} else {
+		ss << "ERROR " << id << " failed to send PLAY command" << std::endl;
+	}
+	std::string answer = ss.str();
+	send_msg(cdescriptor, answer);
+}
+
+void PlayerSession::title(int cdescriptor) {
+	std::string title_str;
+	std::ostringstream ss;
+	if (send_datagram("TITLE", title_str)) {
+		ss << "OK " << id << " " << title_str << std::endl;
+	} else {
+		ss << "ERROR " << id << " failed to send TITLE command" << std::endl;
+	}
+	std::string answer = ss.str();
+	send_msg(cdescriptor, answer);
+}
+
 void PlayerSession::quit(int cdescriptor) {
 	std::ostringstream ss;
 	stop_thread = true;
 	if (send_datagram("QUIT")) {
 		ss << "OK " << id << std::endl;
 	} else {
-		ss << "ERROR " << id << " failed to send PAUSE command" << std::endl;
+		ss << "ERROR " << id << " failed to send QUIT command" << std::endl;
 	}
 	std::string answer = ss.str();
 	send_msg(cdescriptor, answer);
@@ -141,6 +164,69 @@ bool PlayerSession::send_datagram(std::string msg) {
   	if (len != msg.size()) {
   		std::cerr << "Error, partial sendto" << std::endl;
   	}
+
+  	close(sock);
+
+  	return true;
+}
+
+bool PlayerSession::send_datagram(std::string msg, std::string& response) {
+	int rc, sock;
+	size_t len;
+	socklen_t rcva_len;
+
+	struct addrinfo addr_hints;
+	struct addrinfo* addr_result;
+
+	struct sockaddr_in my_address;
+	struct sockaddr_in srvr_address;
+
+	addr_hints.ai_family = AF_INET;
+  	addr_hints.ai_socktype = SOCK_DGRAM;
+  	addr_hints.ai_protocol = IPPROTO_UDP;
+  	addr_hints.ai_flags = 0;
+  	addr_hints.ai_addrlen = 0;
+  	addr_hints.ai_addr = NULL;
+  	addr_hints.ai_canonname = NULL;
+  	addr_hints.ai_next = NULL;
+
+  	rc = getaddrinfo(pc.c_str(), NULL, &addr_hints, &addr_result);
+  	if (rc != 0) { // system error
+    	std::cerr << "getaddrinfo" << std::endl;
+  	}
+
+ 	my_address.sin_family = AF_INET; // IPv4
+  	my_address.sin_addr.s_addr = 
+  		((struct sockaddr_in*) (addr_result->ai_addr))->sin_addr.s_addr; // address IP
+  	my_address.sin_port = htons((uint16_t) atoi(mport.c_str())); // port from the command line
+
+  	rcva_len = (socklen_t) sizeof(my_address);
+
+  	freeaddrinfo(addr_result);
+
+  	sock = socket(PF_INET, SOCK_DGRAM, 0);
+  	if (sock < 0)
+  		std::cerr << "socket" << std::endl;
+
+  	len = sendto(sock, msg.c_str(), msg.size(), 0, 
+  			(struct sockaddr *) &my_address, rcva_len);
+
+  	if (len != msg.size()) {
+  		std::cerr << "Error, partial sendto" << std::endl;
+  	}
+
+
+  	char buffer[BUFFER_SIZE];
+  	len = recvfrom(sock, buffer, sizeof(buffer), 0,
+  				(struct sockaddr *) &srvr_address, &rcva_len);
+
+  	if (len < 0) {
+  		std::cerr << "Error, recvfrom" << std::endl;
+  	}
+
+  	response = std::string(buffer);
+
+  	close(sock);
 
   	return true;
 }

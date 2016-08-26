@@ -18,6 +18,7 @@
 
 const std::string START_COMMAND = "START";
 const std::string PAUSE_COMMAND = "PAUSE";
+const std::string PLAY_COMMAND = "PLAY";
 const std::string TITLE_COMMAND = "TITLE";
 const std::string QUIT_COMMAND = "QUIT";
 const std::string AT_COMMAND = "AT";
@@ -181,11 +182,13 @@ void handle_connection(int conn) {
 					std::string answer = ss.str();
 					rc = write(conn, answer.c_str(), answer.size());
 				}
-
-			} else if (command == PAUSE_COMMAND) {
+			} else if (command == PAUSE_COMMAND ||
+					   command == PLAY_COMMAND ||
+					   command == QUIT_COMMAND ||
+					   command == TITLE_COMMAND) {
 				if (tokens.size() != 2 || !is_int(tokens[1])) {
 					std::ostringstream ss;
-					ss << "ERROR: Proper syntax is \"PAUSE <ID>\"" << std::endl;
+					ss << "ERROR: Proper syntax is \"" << command << " <ID>\"" << std::endl;
 					std::string answer = ss.str();
 					rc = write(conn, answer.c_str(), answer.size());
 				} else {
@@ -193,33 +196,20 @@ void handle_connection(int conn) {
 
 					if (session_ids.find(id) == session_ids.end()) {
 						std::ostringstream ss;
-						ss << "ERROR: No player with such ID" << std::endl;
+						ss << "ERROR: No player with ID " << id << std::endl;
 						std::string answer = ss.str();
 						rc = write(conn, answer.c_str(), answer.size());
 					} else {
 						PlayerSession& session = session_ids.at(id);
 
-						session.pause(conn);
-					}
-				}
-			} else if (command == QUIT_COMMAND) {
-				if (tokens.size() != 2 || !is_int(tokens[1])) {
-					std::ostringstream ss;
-					ss << "ERROR: Proper syntax is \"QUIT <ID>\"" << std::endl;
-					std::string answer = ss.str();
-					rc = write(conn, answer.c_str(), answer.size());
-				} else {
-					unsigned int id = get_int(tokens[1]);
-
-					if (session_ids.find(id) == session_ids.end()) {
-						std::ostringstream ss;
-						ss << "ERROR: No player with such ID" << std::endl;
-						std::string answer = ss.str();
-						rc = write(conn, answer.c_str(), answer.size());
-					} else {
-						PlayerSession& session = session_ids.at(id);
-
-						session.quit(conn);
+						if (command == PAUSE_COMMAND)
+							session.pause(conn);
+						else if (command == PLAY_COMMAND)
+							session.play(conn);
+						else if (command == TITLE_COMMAND)
+							session.title(conn);
+						else if (command == QUIT_COMMAND)
+							session.quit(conn);
 					}
 				}
 			}
