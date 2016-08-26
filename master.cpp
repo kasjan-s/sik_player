@@ -1,4 +1,18 @@
+/* TODO
+-wyświetlenie komunikatu o zakończeniu działania programu ściągającego wraz
+  z ewentualnym komunikatem o przyczynie (błędzie) jego zakończenia;
+-wydawanie polecenia „od godz. HH.MM ściągaj z radia X audycję przez M minut”;
+  odmierzanie czasu ma być zrealizowane po stronie zawiadowcy;
+-Po wyświetleniu komunikatu o zakończeniu działania programu ściągającego
+(komunikat ma zawierać jego ID) identyfikator jest unieważniany.
+
+
+
+*/
+
 #include <algorithm>
+#include <condition_variable>
+#include <deque>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -24,8 +38,35 @@ const std::string QUIT_COMMAND = "QUIT";
 const std::string AT_COMMAND = "AT";
 
 std::map<unsigned int, PlayerSession> session_ids;
+std::deque<unsigned int> finished_session_ids;
 std::vector<int> active_telnet_sessions;
 std::mutex mutex;
+
+std::mutex cond_m;
+std::condition_variable cv;
+
+void deloader_thread()
+{
+	std::cerr << "Started deloader thread" << std::endl;
+    // Wait until there's a session to remove
+    std::unique_lock<std::mutex> lk(cond_m);
+    while(true) {
+	    cv.wait(lk, []{return !finished_session_ids.empty();});
+
+	    mutex.lock();
+    	// Destroy sessions
+    	while (!finished_session_ids.empty()) {
+    		unsigned int id = finished_session_ids.front();
+    		finished_session_ids.pop_front();
+    		if (session_ids.find(id) != session_ids.end()) {
+    			session_ids.erase(id);
+    		}
+	    }
+	    mutex.unlock();
+ 
+    	lk.unlock();
+	}
+}
 
 unsigned int get_new_id() {
 	static int id = 0;
@@ -165,7 +206,8 @@ void handle_connection(int conn) {
 				unsigned int id = get_new_id();
 				session_ids.emplace(std::piecewise_construct,
 									std::forward_as_tuple(id),
-									std::forward_as_tuple(conn, id, active_telnet_sessions, tokens, mutex));
+									std::forward_as_tuple(conn, id, active_telnet_sessions, 
+										finished_session_ids, tokens, mutex, cv));
 
 				PlayerSession& session = session_ids.at(id);
 				if (!session.start()) {
@@ -177,6 +219,9 @@ void handle_connection(int conn) {
 					}
 					continue;
 				} else {
+					/* Little hack, so remote host actually has the time to make a connection */
+					// sleep(1000);
+
 					std::ostringstream ss;
 					ss << "OK " << id << std::endl;
 					std::string answer = ss.str();
@@ -276,6 +321,9 @@ int main(int argc, char* argv[]) {
 		return 1;
 	}
 
+	// Start deloader thread
+	std::thread deloader(deloader_thread);
+
 	std::vector<std::thread> telnet_sessions;
 
 	while (true) {
@@ -283,14 +331,13 @@ int main(int argc, char* argv[]) {
 
 		msgsock = accept(listener, (struct sockaddr *) NULL, NULL);
 		if (msgsock == -1) {
-			std::cerr << "Error while performing accept" << std::endl;
-			// TODO: proper cleanup
-			return 1;
+			std::cerr << "Error while accepting a new telnet connection" << std::endl;
+			// TODO: TO return or NOT TO return?
+			// return 1;
 		}
 
 		telnet_sessions.push_back(std::thread(handle_connection, msgsock));
 	}
-
 
 	return 0;
 }

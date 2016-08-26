@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #define BUFFER_SIZE 1000
+#define TITLE_TIMEOUT_SECONDS 3
 
 bool PlayerSession::start() {
 	std::ostringstream ss;
@@ -24,6 +25,8 @@ bool PlayerSession::start() {
   		ss << parameters[i];
 	}
 
+	/* Redirecting stderr to stdout, so we can read error msgs.
+	   No need to keep stdout as we don't need to implement '-' as file option */
 	ss << "\" 3>&2 2>&1 1>&3";
 
 	std::string ssh_string = ss.str();
@@ -42,9 +45,13 @@ void PlayerSession::main_thread() {
 	char buffer[BUFFER_SIZE];
 
 	std::ostringstream ss;
+
 	/* player only writes to stderr in case of error, so this thread will block
-	   here till actual error happens */
-	if (fgets(buffer, BUFFER_SIZE, descriptor) == NULL && !stop_thread) {
+	   here till actual error happens
+	   However if it can also return fail if we command player to quit,
+	   but then stop_thread will have value true */
+	std::cerr << "Started main thread " << id << std::endl;
+	if ((fgets(buffer, BUFFER_SIZE, descriptor) == NULL) && !stop_thread) {
 		ss << "ERROR " << id << " error while trying to read player stderr" << std::endl;
 
 		std::string error = ss.str();
@@ -53,7 +60,11 @@ void PlayerSession::main_thread() {
 	}
 
 	pclose(descriptor);
-	return;
+
+	mutex.lock();
+	finished_sessions.push_back(id);
+	cond_var.notify_one();
+	mutex.unlock();
 }
 
 void PlayerSession::send_msg(int cdescriptor, std::string str) {
@@ -80,7 +91,8 @@ void PlayerSession::pause(int cdescriptor) {
 	if (send_datagram("PAUSE")) {
 		ss << "OK " << id << std::endl;
 	} else {
-		ss << "ERROR " << id << " failed to send PAUSE command" << std::endl;
+		ss << error_msg;
+		error_msg = "";
 	}
 	std::string answer = ss.str();
 	send_msg(cdescriptor, answer);
@@ -91,7 +103,8 @@ void PlayerSession::play(int cdescriptor) {
 	if (send_datagram("PLAY")) {
 		ss << "OK " << id << std::endl;
 	} else {
-		ss << "ERROR " << id << " failed to send PLAY command" << std::endl;
+		ss << error_msg;
+		error_msg = "";
 	}
 	std::string answer = ss.str();
 	send_msg(cdescriptor, answer);
@@ -103,19 +116,21 @@ void PlayerSession::title(int cdescriptor) {
 	if (send_datagram("TITLE", title_str)) {
 		ss << "OK " << id << " " << title_str << std::endl;
 	} else {
-		ss << "ERROR " << id << " failed to send TITLE command" << std::endl;
+		ss << error_msg;
+		error_msg = "";
 	}
 	std::string answer = ss.str();
 	send_msg(cdescriptor, answer);
 }
 
 void PlayerSession::quit(int cdescriptor) {
-	std::ostringstream ss;
 	stop_thread = true;
+	std::ostringstream ss;
 	if (send_datagram("QUIT")) {
 		ss << "OK " << id << std::endl;
 	} else {
-		ss << "ERROR " << id << " failed to send QUIT command" << std::endl;
+		ss << error_msg;
+		error_msg = "";
 	}
 	std::string answer = ss.str();
 	send_msg(cdescriptor, answer);
@@ -141,8 +156,11 @@ bool PlayerSession::send_datagram(std::string msg) {
   	addr_hints.ai_next = NULL;
 
   	rc = getaddrinfo(pc.c_str(), NULL, &addr_hints, &addr_result);
-  	if (rc != 0) { // system error
-    	std::cerr << "getaddrinfo" << std::endl;
+  	if (rc != 0) {
+		std::ostringstream ss;
+		ss << "ERROR " << id << " getaddrinfo() failed" << std::endl;
+		error_msg = ss.str();
+		return false;
   	}
 
  	my_address.sin_family = AF_INET; // IPv4
@@ -155,14 +173,21 @@ bool PlayerSession::send_datagram(std::string msg) {
   	freeaddrinfo(addr_result);
 
   	sock = socket(PF_INET, SOCK_DGRAM, 0);
-  	if (sock < 0)
-  		std::cerr << "socket" << std::endl;
+  	if (sock < 0) {
+		std::ostringstream ss;
+		ss << "ERROR " << id << " socket() failed" << std::endl;
+		error_msg = ss.str();
+		return false;
+  	}
 
   	len = sendto(sock, msg.c_str(), msg.size(), 0, 
   			(struct sockaddr *) &my_address, rcva_len);
 
   	if (len != msg.size()) {
-  		std::cerr << "Error, partial sendto" << std::endl;
+		std::ostringstream ss;
+		ss << "ERROR " << id << " partial sendto()" << std::endl;
+		error_msg = ss.str();
+		return false;
   	}
 
   	close(sock);
@@ -191,8 +216,11 @@ bool PlayerSession::send_datagram(std::string msg, std::string& response) {
   	addr_hints.ai_next = NULL;
 
   	rc = getaddrinfo(pc.c_str(), NULL, &addr_hints, &addr_result);
-  	if (rc != 0) { // system error
-    	std::cerr << "getaddrinfo" << std::endl;
+  	if (rc != 0) { 
+		std::ostringstream ss;
+		ss << "ERROR " << id << " getaddrinfo() failed" << std::endl;
+		error_msg = ss.str();
+		return false;
   	}
 
  	my_address.sin_family = AF_INET; // IPv4
@@ -205,23 +233,44 @@ bool PlayerSession::send_datagram(std::string msg, std::string& response) {
   	freeaddrinfo(addr_result);
 
   	sock = socket(PF_INET, SOCK_DGRAM, 0);
-  	if (sock < 0)
-  		std::cerr << "socket" << std::endl;
+  	if (sock < 0) {
+		std::ostringstream ss;
+		ss << "ERROR " << id << " socket() failed" << std::endl;
+		error_msg = ss.str();
+		return false;
+  	}
 
   	len = sendto(sock, msg.c_str(), msg.size(), 0, 
   			(struct sockaddr *) &my_address, rcva_len);
 
   	if (len != msg.size()) {
-  		std::cerr << "Error, partial sendto" << std::endl;
+		std::ostringstream ss;
+		ss << "ERROR " << id << " partial sendto()" << std::endl;
+		error_msg = ss.str();
+		return false;
   	}
 
+
+	struct timeval tv;
+	tv.tv_sec = TITLE_TIMEOUT_SECONDS;
+	tv.tv_usec = 0;
+	
+	if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+		std::ostringstream ss;
+		ss << "ERROR " << id << " setsockopt()" << std::endl;
+		error_msg = ss.str();
+		return false;
+	}
 
   	char buffer[BUFFER_SIZE];
   	len = recvfrom(sock, buffer, sizeof(buffer), 0,
   				(struct sockaddr *) &srvr_address, &rcva_len);
 
   	if (len < 0) {
-  		std::cerr << "Error, recvfrom" << std::endl;
+		std::ostringstream ss;
+		ss << "ERROR " << id << " timed out while waiting for Title answer (or other error)" << std::endl;
+		error_msg = ss.str();
+		return false;
   	}
 
   	response = std::string(buffer);

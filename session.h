@@ -2,18 +2,26 @@
 #define _SIKSESSION_
 
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <map>
 #include <mutex>
 #include <thread>
 #include <vector>
 
 class PlayerSession {
 public:
-	PlayerSession(int conn, unsigned int i, std::vector<int>& ac, std::vector<std::string> p, std::mutex& mtx) 
+	PlayerSession(int conn, unsigned int i, 
+		std::vector<int>& ac, std::deque<unsigned int>& f, 
+		std::vector<std::string> p, std::mutex& mtx,
+		std::condition_variable& cv) 
 	: connection_descriptor(conn), 
 	  id(i),
 	  active_connections(ac),
+	  finished_sessions(f),
 	  parameters(p),
 	  mutex(mtx),
+	  cond_var(cv),
 	  stop_thread(false), 
 	  the_thread(),
 	  pc(parameters[1]),
@@ -32,6 +40,7 @@ private:
 	int connection_descriptor;
 	unsigned int id;
 	std::vector<int>& active_connections;
+	std::deque<unsigned int>& finished_sessions;
 
 	/*
 		0 - START
@@ -46,6 +55,7 @@ private:
 	std::vector<std::string> parameters;
 
 	std::mutex& mutex;
+	std::condition_variable& cond_var;
 	std::atomic_bool stop_thread;	
 	std::thread the_thread;
 
@@ -56,6 +66,7 @@ private:
 	bool send_datagram(std::string str);
 	bool send_datagram(std::string str, std::string& response);
 	void main_thread();
+	std::string error_msg;
 };
 
 #endif
