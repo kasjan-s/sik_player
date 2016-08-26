@@ -1,11 +1,3 @@
-/* TODO
--wydawanie polecenia „od godz. HH.MM ściągaj z radia X audycję przez M minut”;
-  odmierzanie czasu ma być zrealizowane po stronie zawiadowcy;
-
-
-
-*/
-
 #include <algorithm>
 #include <condition_variable>
 #include <deque>
@@ -332,7 +324,7 @@ int main(int argc, char* argv[]) {
 		msgsock = accept(listener, (struct sockaddr *) NULL, NULL);
 		if (msgsock == -1) {
 			std::cerr << "Error while accepting a new telnet connection" << std::endl;
-			// TODO: TO return or NOT TO return?
+			// TO return or NOT TO return?
 			// return 1;
 		}
 
