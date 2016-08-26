@@ -233,13 +233,13 @@ int main(int argc, char* argv[]) {
 	if (argc > 2) {
 		std::cerr << "Wrong number of arguments" << std::endl;
 		std::cerr << "Usage: ./master [port]" << std::endl;
-		return -1;
+		return 1;
 	}
 
 	if (argc == 2) {
 		if ((port = get_int_from_argv(argv[1])) == -1) {
 			std::cerr << "Wrong port number" << std::endl;
-			return -1;
+			return 1;
 		}
 	}
 
@@ -247,7 +247,7 @@ int main(int argc, char* argv[]) {
 	int listener;
 	if ((listener = socket(PF_INET, SOCK_STREAM, 0))== -1) {
 		std::cerr << "Error encountered during socket creation" << std::endl;
-		return -1;
+		return 1;
 	}
 
 	// Bind the socket
@@ -257,14 +257,14 @@ int main(int argc, char* argv[]) {
 	server.sin_port = port ? htons(port) : 0;
 	if (bind(listener, (struct sockaddr *)&server, sizeof(server)) == -1) {
 		std::cerr << "Error while performing bind" << std::endl;
-		return -1;
+		return 1;
 	}
 
 	if (!port) {
 		socklen_t len = sizeof(server);
 		if (getsockname(listener, (struct sockaddr *)&server, &len) == -1) {
 			std::cerr << "Error while performing getsockname" << std::endl;
-			return -1;
+			return 1;
 		}
 
 		std::cout << "Listening at port " << (int) ntohs(server.sin_port) << std::endl;
@@ -273,7 +273,7 @@ int main(int argc, char* argv[]) {
 	// Start listening
 	if (listen(listener, 10) == -1) {
 		std::cerr << "Error while performing listen" << std::endl;
-		return -1;
+		return 1;
 	}
 
 	std::vector<std::thread> telnet_sessions;
@@ -285,7 +285,7 @@ int main(int argc, char* argv[]) {
 		if (msgsock == -1) {
 			std::cerr << "Error while performing accept" << std::endl;
 			// TODO: proper cleanup
-			return -1;
+			return 1;
 		}
 
 		telnet_sessions.push_back(std::thread(handle_connection, msgsock));
