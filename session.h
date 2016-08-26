@@ -15,7 +15,8 @@ public:
 		std::vector<int>& ac, std::deque<unsigned int>& f, 
 		std::vector<std::string> p, std::mutex& mtx,
 		std::condition_variable& cv) 
-	: connection_descriptor(conn), 
+	: 
+	  connection_descriptor(conn), 
 	  id(i),
 	  active_connections(ac),
 	  finished_sessions(f),
@@ -28,7 +29,8 @@ public:
 	  mport(parameters[6]) {}
 	~PlayerSession() {
 		stop_thread = true;
-		the_thread.join();
+		if (the_thread.joinable())
+			the_thread.join();
 	}
 	bool start();
 	void send_msg(int cdescriptor, std::string str);
@@ -36,6 +38,7 @@ public:
 	void play(int cdescriptor);
 	void title(int cdescriptor);
 	void quit(int cdescriptor);
+	void destroy();
 private:
 	int connection_descriptor;
 	unsigned int id;

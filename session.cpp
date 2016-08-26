@@ -79,28 +79,24 @@ void PlayerSession::main_thread() {
 	   but then stop_thread will have value true */
 	if ((fgets(buffer, BUFFER_SIZE, descriptor) == NULL) && !stop_thread) {
 		ss << "ERROR " << id << " : lost connection to player\r\n";
-
 		std::string error = ss.str();
 
 		mutex.lock();
 		send_msg(connection_descriptor, error);
 		mutex.unlock();
 	}
-
 	pclose(descriptor);
 
-	mutex.lock();
-	finished_sessions.push_back(id);
+	std::lock_guard<std::mutex> lg(mutex);
 
+	finished_sessions.push_back(id);
 	if (quit_descriptor != -1) {
 		ss.clear();
 		ss << "OK " << id << " player quit\r\n";
 		std::string answer = ss.str();
 		send_msg(quit_descriptor, answer);
 	}
-
 	cond_var.notify_one();
-	mutex.unlock();
 }
 
 void PlayerSession::send_msg(int cdescriptor, std::string str) {
@@ -162,8 +158,10 @@ void PlayerSession::title(int cdescriptor) {
 }
 
 void PlayerSession::quit(int cdescriptor) {
+	std::cerr << "Odpalam QUIT" << std::endl;
 	std::ostringstream ss;
 	if (stop_thread) {
+		std::cerr << "If 1" << std::endl;
 		ss << "ERROR " << id << " QUIT already called\r\n";
 		std::string answer = ss.str();
 		mutex.lock();
@@ -172,9 +170,12 @@ void PlayerSession::quit(int cdescriptor) {
 		return;
 	}
 
+	std::cerr << "cd QUIT" << std::endl;
+
 	stop_thread = true;
 	quit_descriptor = cdescriptor;
 	if (!send_datagram("QUIT")) {
+		std::cerr << "udp fail QUIT" << std::endl;
 		ss << error_msg;
 		error_msg = "";
 		std::string answer = ss.str();

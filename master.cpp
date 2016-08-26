@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <deque>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -58,8 +59,6 @@ void deloader_thread()
     		}
 	    }
 	    mutex.unlock();
- 
-    	lk.unlock();
 	}
 }
 
@@ -68,15 +67,15 @@ unsigned int get_new_id() {
 	return id++;
 }
 
-std::vector<std::string> split_string(const std::string &s, char delim = ' ') {
-	std::stringstream ss(s);
-	std::string item;
-	std::vector<std::string> ret;
-	while (getline(ss, item, delim)) {
-		ret.push_back(item);
-	}
+std::vector<std::string> split_string(std::string &s) {
+	using namespace std;
+	istringstream iss(s);
+	vector<string> tokens;
+	copy(istream_iterator<string>(iss),
+     	istream_iterator<string>(),
+     	back_inserter(tokens));;
+	return tokens;
 
-	return ret;
 }
 
 bool is_int(std::string str) {
@@ -151,7 +150,6 @@ void handle_connection(int conn) {
 	socklen_t len = sizeof(addr);
 
 	if (getpeername(conn, (struct sockaddr *)&addr, &len) == -1) {
-		std::cerr << "Error while performing getpeername" << std::endl;
 		return;
 	}
 
@@ -170,7 +168,6 @@ void handle_connection(int conn) {
 		rc = read(conn, buffer, sizeof(buffer));
 
 		if (rc == -1) {
-			std::cerr << "Error while read" << std::endl;
 			return;
 		} else if (rc == 0) {
 			break;
@@ -198,19 +195,31 @@ void handle_connection(int conn) {
 			std::string command = tokens[0];
 
 			if (command == START_COMMAND) {
-				unsigned int id = get_new_id();
-				session_ids.emplace(std::piecewise_construct,
-									std::forward_as_tuple(id),
-									std::forward_as_tuple(conn, id, active_telnet_sessions, 
-										finished_session_ids, tokens, mutex, cv));
-
-				PlayerSession& session = session_ids.at(id);
-
-				if (session.start()) {
+				if (tokens.size() != 8) {
 					std::ostringstream ss;
-					ss << "OK " << id << "\r\n";
+					ss << "ERROR Proper syntax is \"START pc host path r-port file m-port md\"\r\n";
 					std::string answer = ss.str();
 					rc = write(conn, answer.c_str(), answer.size());
+				} else {
+					unsigned int id = get_new_id();
+					session_ids.emplace(std::piecewise_construct,
+										std::forward_as_tuple(id),
+										std::forward_as_tuple(conn, id, active_telnet_sessions, 
+											finished_session_ids, tokens, mutex, cv));
+
+					PlayerSession& session = session_ids.at(id);
+
+					if (session.start()) {
+						std::ostringstream ss;
+						ss << "OK " << id << "\r\n";
+						std::string answer = ss.str();
+						rc = write(conn, answer.c_str(), answer.size());
+					} else {
+						mutex.lock();
+						finished_session_ids.push_back(id);
+						cv.notify_one();
+						mutex.unlock();
+					}
 				}
 			} else if (command == PAUSE_COMMAND ||
 					   command == PLAY_COMMAND ||
@@ -238,13 +247,14 @@ void handle_connection(int conn) {
 							session.play(conn);
 						else if (command == TITLE_COMMAND)
 							session.title(conn);
-						else if (command == QUIT_COMMAND)
+						else if (command == QUIT_COMMAND) {
 							session.quit(conn);
+						}
 					}
 				}
 			} else {
 				std::ostringstream ss;
-				ss << "ERROR: Unknown command\"\r\n";
+				ss << "ERROR: Unknown command\r\n";
 				std::string answer = ss.str();
 				rc = write(conn, answer.c_str(), answer.size());
 			}
@@ -327,6 +337,11 @@ int main(int argc, char* argv[]) {
 		}
 
 		telnet_sessions.push_back(std::thread(handle_connection, msgsock));
+	}
+
+	deloader.join();
+	for (unsigned int i = 0; i < telnet_sessions.size(); ++i) {
+		telnet_sessions[i].join();
 	}
 
 	return 0;
