@@ -42,6 +42,27 @@ std::vector<std::string> split_string(const std::string &s, char delim = ' ') {
 	return ret;
 }
 
+bool is_int(std::string str) {
+	std::istringstream ss(str);
+	int ret; 
+
+	if (!(ss >> ret) || !ss.eof())
+		return false;
+
+	return true;
+}
+
+int get_int(std::string str) {
+	std::istringstream ss(str);
+	int ret;
+
+	// Argument should be writable to int without any leftovers
+	if (!(ss >> ret) || !ss.eof())
+		return -1;
+
+	return ret;
+}
+
 int get_int_from_argv(const char* arg) {
 	std::istringstream ss(arg);
 	int ret;
@@ -161,6 +182,46 @@ void handle_connection(int conn) {
 					rc = write(conn, answer.c_str(), answer.size());
 				}
 
+			} else if (command == PAUSE_COMMAND) {
+				if (tokens.size() != 2 || !is_int(tokens[1])) {
+					std::ostringstream ss;
+					ss << "ERROR: Proper syntax is \"PAUSE <ID>\"" << std::endl;
+					std::string answer = ss.str();
+					rc = write(conn, answer.c_str(), answer.size());
+				} else {
+					unsigned int id = get_int(tokens[1]);
+
+					if (session_ids.find(id) == session_ids.end()) {
+						std::ostringstream ss;
+						ss << "ERROR: No player with such ID" << std::endl;
+						std::string answer = ss.str();
+						rc = write(conn, answer.c_str(), answer.size());
+					} else {
+						PlayerSession& session = session_ids.at(id);
+
+						session.pause(conn);
+					}
+				}
+			} else if (command == QUIT_COMMAND) {
+				if (tokens.size() != 2 || !is_int(tokens[1])) {
+					std::ostringstream ss;
+					ss << "ERROR: Proper syntax is \"QUIT <ID>\"" << std::endl;
+					std::string answer = ss.str();
+					rc = write(conn, answer.c_str(), answer.size());
+				} else {
+					unsigned int id = get_int(tokens[1]);
+
+					if (session_ids.find(id) == session_ids.end()) {
+						std::ostringstream ss;
+						ss << "ERROR: No player with such ID" << std::endl;
+						std::string answer = ss.str();
+						rc = write(conn, answer.c_str(), answer.size());
+					} else {
+						PlayerSession& session = session_ids.at(id);
+
+						session.quit(conn);
+					}
+				}
 			}
 		}
 

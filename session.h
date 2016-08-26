@@ -15,13 +15,17 @@ public:
 	  parameters(p),
 	  mutex(mtx),
 	  stop_thread(false), 
-	  the_thread() {}
+	  the_thread(),
+	  pc(parameters[1]),
+	  mport(parameters[6]) {}
 	~PlayerSession() {
 		stop_thread = true;
 		the_thread.join();
 	}
 	bool start();
 	void send_msg(int cdescriptor, std::string str);
+	void pause(int cdescriptor);
+	void quit(int cdescriptor);
 private:
 	int connection_descriptor;
 	unsigned int id;
@@ -43,9 +47,11 @@ private:
 	std::atomic_bool stop_thread;	
 	std::thread the_thread;
 
-	int mport = -1;
+	std::string pc;
+	std::string mport;
 	FILE* descriptor;
 
+	bool send_datagram(std::string str);
 	void main_thread();
 };
 
