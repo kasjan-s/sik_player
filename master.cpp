@@ -205,20 +205,10 @@ void handle_connection(int conn) {
 										finished_session_ids, tokens, mutex, cv));
 
 				PlayerSession& session = session_ids.at(id);
-				if (!session.start()) {
-					std::string error = "ERROR popen failed";
-					rc = write(conn, error.c_str(), error.size());
-					if (rc == -1) {
-						std::cerr << "Error while write" << std::endl;
-						return;
-					}
-					continue;
-				} else {
-					/* Little hack, so remote host actually has the time to make a connection */
-					// sleep(1000);
 
+				if (session.start()) {
 					std::ostringstream ss;
-					ss << "OK " << id << std::endl;
+					ss << "OK " << id << "\r\n";
 					std::string answer = ss.str();
 					rc = write(conn, answer.c_str(), answer.size());
 				}
@@ -228,7 +218,7 @@ void handle_connection(int conn) {
 					   command == TITLE_COMMAND) {
 				if (tokens.size() != 2 || !is_int(tokens[1])) {
 					std::ostringstream ss;
-					ss << "ERROR: Proper syntax is \"" << command << " <ID>\"" << std::endl;
+					ss << "ERROR: Proper syntax is \"" << command << " <ID>\"\r\n";
 					std::string answer = ss.str();
 					rc = write(conn, answer.c_str(), answer.size());
 				} else {
@@ -236,7 +226,7 @@ void handle_connection(int conn) {
 
 					if (session_ids.find(id) == session_ids.end()) {
 						std::ostringstream ss;
-						ss << "ERROR: No player with ID " << id << std::endl;
+						ss << "ERROR: No player with ID " << id << "\r\n";
 						std::string answer = ss.str();
 						rc = write(conn, answer.c_str(), answer.size());
 					} else {
@@ -252,6 +242,11 @@ void handle_connection(int conn) {
 							session.quit(conn);
 					}
 				}
+			} else {
+				std::ostringstream ss;
+				ss << "ERROR: Unknown command\"\r\n";
+				std::string answer = ss.str();
+				rc = write(conn, answer.c_str(), answer.size());
 			}
 		}
 
@@ -277,7 +272,7 @@ int main(int argc, char* argv[]) {
 	}
 
 	if (argc == 2) {
-		if ((port = get_int_from_argv(argv[1])) == -1) {
+		if ((port = get_int_from_argv(argv[1])) == -1 || port <= 0 || port > 65535) {
 			std::cerr << "Wrong port number" << std::endl;
 			return 1;
 		}

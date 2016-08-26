@@ -6,12 +6,23 @@
 
 #include <netdb.h>
 #include <sys/types.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <stdio.h>
 #include <unistd.h>
 
 #define BUFFER_SIZE 1000
 #define TITLE_TIMEOUT_SECONDS 3
+
+int is_ready(int fd) {
+    fd_set fdset;
+    struct timeval timeout;
+    FD_ZERO(&fdset);
+    FD_SET(fd, &fdset);
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 500000;
+    return select(fd+1, &fdset, NULL, NULL, &timeout) == 1 ? 1 : 0;
+}
 
 bool PlayerSession::start() {
 	std::ostringstream ss;
@@ -33,8 +44,24 @@ bool PlayerSession::start() {
 
 	descriptor = popen(ssh_string.c_str(), "r");
 
-	if (descriptor == NULL)
+	std::ostringstream ss2;
+	if (descriptor == NULL) {
+		ss2 << "ERROR popen failed\r\n";
+		mutex.lock();
+		send_msg(connection_descriptor, ss2.str());
+		mutex.unlock();
 		return false;
+	}
+
+	if (is_ready(fileno(descriptor))) {
+		char buffer[BUFFER_SIZE];
+		fgets(buffer, BUFFER_SIZE, descriptor);
+		ss2 << "ERROR " << buffer << "\r\n";
+		mutex.lock();
+		send_msg(connection_descriptor, ss2.str());
+		mutex.unlock();
+		return false;
+	}
 
 	the_thread = std::thread(&PlayerSession::main_thread, this);
 
@@ -51,7 +78,7 @@ void PlayerSession::main_thread() {
 	   However if it can also return fail if we command player to quit,
 	   but then stop_thread will have value true */
 	if ((fgets(buffer, BUFFER_SIZE, descriptor) == NULL) && !stop_thread) {
-		ss << "ERROR " << id << " error while trying to read player stderr" << std::endl;
+		ss << "ERROR " << id << " : lost connection to player\r\n";
 
 		std::string error = ss.str();
 
@@ -67,7 +94,7 @@ void PlayerSession::main_thread() {
 
 	if (quit_descriptor != -1) {
 		ss.clear();
-		ss << "OK " << id << " player quit" << std::endl;
+		ss << "OK " << id << " player quit\r\n";
 		std::string answer = ss.str();
 		send_msg(quit_descriptor, answer);
 	}
@@ -94,7 +121,7 @@ void PlayerSession::send_msg(int cdescriptor, std::string str) {
 void PlayerSession::pause(int cdescriptor) {
 	std::ostringstream ss;
 	if (send_datagram("PAUSE")) {
-		ss << "OK " << id << std::endl;
+		ss << "OK " << id << "\r\n";
 	} else {
 		ss << error_msg;
 		error_msg = "";
@@ -108,7 +135,7 @@ void PlayerSession::pause(int cdescriptor) {
 void PlayerSession::play(int cdescriptor) {
 	std::ostringstream ss;
 	if (send_datagram("PLAY")) {
-		ss << "OK " << id << std::endl;
+		ss << "OK " << id << "\r\n";
 	} else {
 		ss << error_msg;
 		error_msg = "";
@@ -123,7 +150,7 @@ void PlayerSession::title(int cdescriptor) {
 	std::string title_str;
 	std::ostringstream ss;
 	if (send_datagram("TITLE", title_str)) {
-		ss << "OK " << id << " " << title_str << std::endl;
+		ss << "OK " << id << " " << title_str << "\r\n";
 	} else {
 		ss << error_msg;
 		error_msg = "";
@@ -137,7 +164,7 @@ void PlayerSession::title(int cdescriptor) {
 void PlayerSession::quit(int cdescriptor) {
 	std::ostringstream ss;
 	if (stop_thread) {
-		ss << "ERROR " << id << " QUIT already called" << std::endl;
+		ss << "ERROR " << id << " QUIT already called\r\n";
 		std::string answer = ss.str();
 		mutex.lock();
 		send_msg(cdescriptor, answer);
@@ -179,7 +206,7 @@ bool PlayerSession::send_datagram(std::string msg) {
   	rc = getaddrinfo(pc.c_str(), NULL, &addr_hints, &addr_result);
   	if (rc != 0) {
 		std::ostringstream ss;
-		ss << "ERROR " << id << " getaddrinfo() failed" << std::endl;
+		ss << "ERROR " << id << " getaddrinfo() failed\r\n";
 		error_msg = ss.str();
 		return false;
   	}
@@ -196,7 +223,7 @@ bool PlayerSession::send_datagram(std::string msg) {
   	sock = socket(PF_INET, SOCK_DGRAM, 0);
   	if (sock < 0) {
 		std::ostringstream ss;
-		ss << "ERROR " << id << " socket() failed" << std::endl;
+		ss << "ERROR " << id << " socket() failed\r\n";
 		error_msg = ss.str();
 		return false;
   	}
@@ -206,7 +233,7 @@ bool PlayerSession::send_datagram(std::string msg) {
 
   	if (len != msg.size()) {
 		std::ostringstream ss;
-		ss << "ERROR " << id << " partial sendto()" << std::endl;
+		ss << "ERROR " << id << " partial sendto()\r\n";
 		error_msg = ss.str();
 		return false;
   	}
@@ -239,7 +266,7 @@ bool PlayerSession::send_datagram(std::string msg, std::string& response) {
   	rc = getaddrinfo(pc.c_str(), NULL, &addr_hints, &addr_result);
   	if (rc != 0) { 
 		std::ostringstream ss;
-		ss << "ERROR " << id << " getaddrinfo() failed" << std::endl;
+		ss << "ERROR " << id << " getaddrinfo() failed\r\n";
 		error_msg = ss.str();
 		return false;
   	}
@@ -256,7 +283,7 @@ bool PlayerSession::send_datagram(std::string msg, std::string& response) {
   	sock = socket(PF_INET, SOCK_DGRAM, 0);
   	if (sock < 0) {
 		std::ostringstream ss;
-		ss << "ERROR " << id << " socket() failed" << std::endl;
+		ss << "ERROR " << id << " socket() failed\r\n";
 		error_msg = ss.str();
 		return false;
   	}
@@ -266,7 +293,7 @@ bool PlayerSession::send_datagram(std::string msg, std::string& response) {
 
   	if (len != msg.size()) {
 		std::ostringstream ss;
-		ss << "ERROR " << id << " partial sendto()" << std::endl;
+		ss << "ERROR " << id << " partial sendto()\r\n";
 		error_msg = ss.str();
 		return false;
   	}
@@ -278,7 +305,7 @@ bool PlayerSession::send_datagram(std::string msg, std::string& response) {
 	
 	if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
 		std::ostringstream ss;
-		ss << "ERROR " << id << " setsockopt()" << std::endl;
+		ss << "ERROR " << id << " setsockopt()\r\n";
 		error_msg = ss.str();
 		return false;
 	}
@@ -289,7 +316,7 @@ bool PlayerSession::send_datagram(std::string msg, std::string& response) {
 
   	if (len < 0) {
 		std::ostringstream ss;
-		ss << "ERROR " << id << " timed out while waiting for Title answer (or other error)" << std::endl;
+		ss << "ERROR " << id << " timed out while waiting for Title answer (or other error)\r\n";
 		error_msg = ss.str();
 		return false;
   	}
