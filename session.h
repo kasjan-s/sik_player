@@ -67,6 +67,7 @@ private:
 	bool send_datagram(std::string str, std::string& response);
 	void main_thread();
 	std::string error_msg;
+	int quit_descriptor = -1;
 };
 
 #endif

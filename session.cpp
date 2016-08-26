@@ -50,40 +50,45 @@ void PlayerSession::main_thread() {
 	   here till actual error happens
 	   However if it can also return fail if we command player to quit,
 	   but then stop_thread will have value true */
-	std::cerr << "Started main thread " << id << std::endl;
 	if ((fgets(buffer, BUFFER_SIZE, descriptor) == NULL) && !stop_thread) {
 		ss << "ERROR " << id << " error while trying to read player stderr" << std::endl;
 
 		std::string error = ss.str();
 
+		mutex.lock();
 		send_msg(connection_descriptor, error);
+		mutex.unlock();
 	}
 
 	pclose(descriptor);
 
 	mutex.lock();
 	finished_sessions.push_back(id);
+
+	if (quit_descriptor != -1) {
+		ss.clear();
+		ss << "OK " << id << " player quit" << std::endl;
+		std::string answer = ss.str();
+		send_msg(quit_descriptor, answer);
+	}
+
 	cond_var.notify_one();
 	mutex.unlock();
 }
 
 void PlayerSession::send_msg(int cdescriptor, std::string str) {
 	int rc;
-	mutex.lock();
 	if(std::find(active_connections.begin(),
 				 active_connections.end(), 
 				 cdescriptor) != active_connections.end()) {
 
-		mutex.unlock();
 		rc = write(cdescriptor, str.c_str(), str.size());
 
 		if (rc == -1) {
 			std::cerr << "Error while write" << std::endl;
 			return;
 		}
-	} else {
-		mutex.unlock();
-	}
+	} 
 }
 
 void PlayerSession::pause(int cdescriptor) {
@@ -95,7 +100,9 @@ void PlayerSession::pause(int cdescriptor) {
 		error_msg = "";
 	}
 	std::string answer = ss.str();
+	mutex.lock();
 	send_msg(cdescriptor, answer);
+	mutex.unlock();
 }
 
 void PlayerSession::play(int cdescriptor) {
@@ -107,7 +114,9 @@ void PlayerSession::play(int cdescriptor) {
 		error_msg = "";
 	}
 	std::string answer = ss.str();
+	mutex.lock();
 	send_msg(cdescriptor, answer);
+	mutex.unlock();
 }
 
 void PlayerSession::title(int cdescriptor) {
@@ -120,20 +129,32 @@ void PlayerSession::title(int cdescriptor) {
 		error_msg = "";
 	}
 	std::string answer = ss.str();
+	mutex.lock();
 	send_msg(cdescriptor, answer);
+	mutex.unlock();
 }
 
 void PlayerSession::quit(int cdescriptor) {
-	stop_thread = true;
 	std::ostringstream ss;
-	if (send_datagram("QUIT")) {
-		ss << "OK " << id << std::endl;
-	} else {
+	if (stop_thread) {
+		ss << "ERROR " << id << " QUIT already called" << std::endl;
+		std::string answer = ss.str();
+		mutex.lock();
+		send_msg(cdescriptor, answer);
+		mutex.unlock();
+		return;
+	}
+
+	stop_thread = true;
+	quit_descriptor = cdescriptor;
+	if (!send_datagram("QUIT")) {
 		ss << error_msg;
 		error_msg = "";
+		std::string answer = ss.str();
+		mutex.lock();
+		send_msg(cdescriptor, answer);
+		mutex.unlock();
 	}
-	std::string answer = ss.str();
-	send_msg(cdescriptor, answer);
 }
 
 bool PlayerSession::send_datagram(std::string msg) {

@@ -1,10 +1,6 @@
 /* TODO
--wyświetlenie komunikatu o zakończeniu działania programu ściągającego wraz
-  z ewentualnym komunikatem o przyczynie (błędzie) jego zakończenia;
 -wydawanie polecenia „od godz. HH.MM ściągaj z radia X audycję przez M minut”;
   odmierzanie czasu ma być zrealizowane po stronie zawiadowcy;
--Po wyświetleniu komunikatu o zakończeniu działania programu ściągającego
-(komunikat ma zawierać jego ID) identyfikator jest unieważniany.
 
 
 
@@ -47,7 +43,6 @@ std::condition_variable cv;
 
 void deloader_thread()
 {
-	std::cerr << "Started deloader thread" << std::endl;
     // Wait until there's a session to remove
     std::unique_lock<std::mutex> lk(cond_m);
     while(true) {
